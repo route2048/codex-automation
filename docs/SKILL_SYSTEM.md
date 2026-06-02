@@ -12,9 +12,9 @@ runs release-readiness checks for this project itself.
 
 - `codex-automation-setup`: install, doctor, initialize a thin control
   workspace, register target repos, and explain result submission.
-- `codex-automation-dev`: verify Rust tests, public export, clean local
-  install, optional Docker install, setup skill installation, and route dry-run
-  smoke before publication.
+- `codex-automation-dev`: verify Rust tests, clean local install, optional
+  Docker install, setup skill installation, and fixture dry-run smoke before
+  publication.
 - `repo-discovery`: default read-only worker definition generated under
   `workers/repo-discovery.toml`.
 

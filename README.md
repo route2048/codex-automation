@@ -163,7 +163,6 @@ ingest a worker's final JSON result.
 - approval request/list/record
 - transactional result submission and listing
 - setup skill and agent-first setup script
-- allowlisted public export for publishing from a private maintainer checkout
 
 Upcoming control-plane work should build on the SQLite boundary: skill pack
 export/install, richer workorder generation, and app update flows should become
@@ -197,16 +196,6 @@ Use codex-automation-setup for this repository.
 cargo fmt --all -- --check
 cargo test --workspace
 ```
-
-Build and inspect a sanitized public tree:
-
-```bash
-python3 scripts/build_public_export.py --output .public-export/codex-automation --overwrite
-python3 scripts/build_public_export.py --output .public-export/codex-automation --check-only
-```
-
-Do not publish private runtime state directly. Public release artifacts should
-include only the files listed in `MANIFEST.public.json`.
 
 ## Maintainer Verification
 

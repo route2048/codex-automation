@@ -19,7 +19,6 @@ Thanks for helping improve `codex-automation`.
 ```bash
 cargo fmt --all -- --check
 cargo test --workspace
-python3 scripts/build_public_export.py --output .public-export/codex-automation --check-only
 ```
 
 For agent-first bootstrap smoke tests, use a fixture target and temporary app
