@@ -1,0 +1,7 @@
+.public-export/
+.archive/
+target/
+targets/
+reports/
+**/__pycache__/
+*.pyc

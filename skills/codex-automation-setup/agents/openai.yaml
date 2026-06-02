@@ -1,0 +1,8 @@
+interface:
+  display_name: "Codex Automation Setup"
+  short_description: "Bootstrap repo automation with Codex"
+  brand_color: "#2563EB"
+  default_prompt: "Use $codex-automation-setup to bootstrap codex-automation for this repository."
+
+policy:
+  allow_implicit_invocation: true
