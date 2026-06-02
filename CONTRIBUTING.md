@@ -26,11 +26,12 @@ For agent-first bootstrap smoke tests, use a fixture target and temporary app
 state:
 
 ```bash
-tmp=$(mktemp -d)
-CODEX_AUTOMATION_HOME="$tmp/state" \
-  python3 scripts/setup.py tests/fixtures/node-package \
-  --workspace "$tmp/control" \
-  --clone-dir "$tmp/targets" \
-  --target-id node-demo \
-  --profile observe
+python3 skills/codex-automation-dev/scripts/verify_clean_install.py --repo . --json
+python3 skills/codex-automation-dev/scripts/verify_skill_install.py --repo . --install-setup-skill --install-dev-skill --overwrite --json
+```
+
+When Docker verification is explicitly wanted:
+
+```bash
+bash skills/codex-automation-dev/scripts/verify_docker_install.sh .
 ```

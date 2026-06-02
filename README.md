@@ -194,6 +194,7 @@ Use codex-automation-setup for this repository.
 ## Test
 
 ```bash
+cargo fmt --all -- --check
 cargo test --workspace
 ```
 
@@ -206,3 +207,27 @@ python3 scripts/build_public_export.py --output .public-export/codex-automation 
 
 Do not publish private runtime state directly. Public release artifacts should
 include only the files listed in `MANIFEST.public.json`.
+
+## Maintainer Verification
+
+The developer verification skill lives at:
+
+```text
+skills/codex-automation-dev/
+```
+
+Use it before publishing or release work:
+
+```bash
+python3 skills/codex-automation-dev/scripts/verify_clean_install.py --repo . --json
+python3 skills/codex-automation-dev/scripts/verify_skill_install.py --repo . --install-setup-skill --install-dev-skill --overwrite --json
+```
+
+For disposable Linux install verification, run Docker explicitly:
+
+```bash
+bash skills/codex-automation-dev/scripts/verify_docker_install.sh .
+```
+
+The Docker verifier uses a temporary container and must not be confused with
+target app service startup. It does not push, deploy, or run real workers.

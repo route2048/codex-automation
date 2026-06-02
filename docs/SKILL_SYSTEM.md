@@ -5,10 +5,16 @@
 The setup entrypoint is `skills/codex-automation-setup/`. It bootstraps this
 tool and hands ongoing work to the CLI control surface.
 
+The maintainer verification entrypoint is `skills/codex-automation-dev/`. It
+runs release-readiness checks for this project itself.
+
 ## Implemented
 
 - `codex-automation-setup`: install, doctor, initialize a thin control
   workspace, register target repos, and explain result submission.
+- `codex-automation-dev`: verify Rust tests, public export, clean local
+  install, optional Docker install, setup skill installation, and route dry-run
+  smoke before publication.
 - `repo-discovery`: default read-only worker definition generated under
   `workers/repo-discovery.toml`.
 
