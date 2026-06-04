@@ -19,16 +19,33 @@ def resolve_repo(raw: str | None) -> Path:
     candidates: list[Path] = []
     if raw:
         candidates.append(Path(raw).expanduser())
-    configured = os.environ.get("CODEX_AUTOMATION_REPO")
-    if configured:
-        candidates.append(Path(configured).expanduser())
     cwd = Path.cwd()
     candidates.extend([cwd, *cwd.parents])
     for candidate in candidates:
         resolved = candidate.resolve()
         if (resolved / "Cargo.toml").is_file() and (resolved / "skills").is_dir():
             return resolved
-    raise RuntimeError("codex-automation repo not found; pass --repo or set CODEX_AUTOMATION_REPO")
+    raise RuntimeError("codex-automation repo not found; pass --repo or run from the repository")
+
+
+def ensure_binary(repo: Path) -> Path:
+    """Build and return a fresh source-built binary for verification."""
+    run_command(
+        [
+            "cargo",
+            "build",
+            "-p",
+            "codex-automation-cli",
+            "--bin",
+            "codex-automation",
+        ],
+        cwd=repo,
+        env=os.environ.copy(),
+    )
+    binary = repo / "target" / "debug" / "codex-automation"
+    if not binary.is_file():
+        raise FileNotFoundError(f"built binary missing: {binary}")
+    return binary
 
 
 def copy_skill(source: Path, destination: Path, overwrite: bool) -> dict[str, Any]:
@@ -77,15 +94,34 @@ def run_json(argv: list[str], *, cwd: Path, env: dict[str, str]) -> dict[str, An
 def verify(args: argparse.Namespace) -> dict[str, Any]:
     """Install and verify skills."""
     repo = resolve_repo(args.repo)
+    binary = ensure_binary(repo)
     codex_home = Path(args.codex_home or os.environ.get("CODEX_HOME", "~/.codex")).expanduser().resolve()
     skills_root = codex_home / "skills"
     skills_root.mkdir(parents=True, exist_ok=True)
+    state_temp = tempfile.TemporaryDirectory(prefix="codex-automation-skill-state-")
+    env = {
+        **os.environ,
+        "CODEX_AUTOMATION_BIN": str(binary),
+        "CODEX_AUTOMATION_HOME": state_temp.name,
+        "CODEX_HOME": str(codex_home),
+    }
     operations: dict[str, Any] = {}
     if args.install_setup_skill:
-        operations["codex-automation-setup"] = copy_skill(
-            repo / "skills" / "codex-automation-setup",
-            skills_root / "codex-automation-setup",
-            args.overwrite,
+        command = [
+            str(binary),
+            "skill",
+            "install",
+            "codex-automation-setup",
+            "--codex-home",
+            str(codex_home),
+            "--json",
+        ]
+        if args.overwrite:
+            command.insert(-1, "--overwrite")
+        operations["codex-automation-setup"] = run_json(
+            command,
+            cwd=repo,
+            env=env,
         )
     if args.install_dev_skill:
         operations["codex-automation-dev"] = copy_skill(
@@ -123,11 +159,7 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
 
     temp = tempfile.TemporaryDirectory(prefix="codex-automation-skill-")
     temp_root = Path(temp.name)
-    env = {
-        **os.environ,
-        "CODEX_AUTOMATION_REPO": str(repo),
-        "CODEX_AUTOMATION_HOME": str(temp_root / "state"),
-    }
+    env["CODEX_AUTOMATION_HOME"] = str(temp_root / "state")
     doctor = run_json(
         [sys.executable, str(skills_root / "codex-automation-setup" / "scripts" / "doctor.py")],
         cwd=Path(temp.name),
@@ -136,10 +168,12 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
     if doctor.get("status") != "ok":
         raise AssertionError(f"setup skill doctor status is {doctor.get('status')!r}")
     temp.cleanup()
+    state_temp.cleanup()
 
     return {
         "status": "ok",
         "repo": str(repo),
+        "binary": str(binary),
         "codex_home": str(codex_home),
         "operations": operations,
         "installed": installed,

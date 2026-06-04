@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="${1:-${CODEX_AUTOMATION_REPO:-$(pwd)}}"
+REPO="${1:-$(pwd)}"
 IMAGE="${CODEX_AUTOMATION_DOCKER_IMAGE:-rust:1-bookworm}"
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/codex-automation-docker.XXXXXX")"
 
@@ -58,16 +58,19 @@ cargo install --path crates/codex-automation-cli --locked --root /work/codex-ins
 export PATH="/work/codex-install/bin:$PATH"
 export CODEX_AUTOMATION_HOME=/work/codex-state
 export CODEX_AUTOMATION_BIN=/work/codex-install/bin/codex-automation
+export CODEX_HOME=/work/codex-home
 
 codex-automation doctor --json
 codex-automation db doctor --json
+codex-automation skill install codex-automation-setup --json
 
 cp -R tests/fixtures/node-package /work/target
-python3 scripts/setup.py /work/target \
+codex-automation init /work/target \
   --workspace /work/control \
   --clone-dir /work/clones \
   --target-id docker-node \
-  --profile observe > /work/setup.json
+  --profile observe \
+  --json > /work/setup.json
 
 codex-automation target list --json
 codex-automation target pack docker-node --json

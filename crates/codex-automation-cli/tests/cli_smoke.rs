@@ -34,6 +34,96 @@ fn run_failure(args: &[&str], app_home: &Path, extra_env: &[(&str, &str)]) -> St
 }
 
 #[test]
+fn cli_installs_embedded_setup_skill_and_init_bootstraps_workspace() {
+    let temp = TempDir::new().expect("tempdir");
+    let app_home = temp.path().join("app-state");
+    let codex_home = temp.path().join("codex-home");
+    let init_codex_home = temp.path().join("init-codex-home");
+    let workspace = temp.path().join("codex-automation");
+    let target = temp.path().join("target-repo");
+    std::fs::create_dir(&target).expect("target repo dir");
+    std::fs::write(target.join("README.md"), "demo").expect("readme");
+
+    let codex_home_text = codex_home.to_str().expect("codex home");
+    let before = run_json_with_env(
+        &[
+            "skill",
+            "status",
+            "codex-automation-setup",
+            "--codex-home",
+            codex_home_text,
+        ],
+        &app_home,
+        &[("CODEX_HOME", codex_home_text)],
+    );
+    assert_eq!(before["status"], "ok");
+    assert_eq!(before["installed"], false);
+
+    let installed = run_json_with_env(
+        &[
+            "skill",
+            "install",
+            "codex-automation-setup",
+            "--codex-home",
+            codex_home_text,
+        ],
+        &app_home,
+        &[("CODEX_HOME", codex_home_text)],
+    );
+    assert_eq!(installed["status"], "installed");
+    assert_eq!(installed["restart_required"], true);
+    assert!(codex_home
+        .join("skills")
+        .join("codex-automation-setup")
+        .join("SKILL.md")
+        .is_file());
+    assert!(codex_home
+        .join("skills")
+        .join("codex-automation-setup")
+        .join("scripts")
+        .join("setup.py")
+        .is_file());
+
+    let init_codex_home_text = init_codex_home.to_str().expect("init codex home");
+    let init = run_json_with_env(
+        &[
+            "init",
+            target.to_str().expect("target path"),
+            "--workspace",
+            workspace.to_str().expect("workspace path"),
+            "--target-id",
+            "demo-init",
+            "--profile",
+            "observe",
+        ],
+        &app_home,
+        &[("CODEX_HOME", init_codex_home_text)],
+    );
+    assert_eq!(init["status"], "ready_for_handoff");
+    assert_eq!(init["target_id"], "demo-init");
+    assert_eq!(init["skill_install"]["status"], "installed");
+    assert_eq!(init["workspace_action"], "initialized");
+    assert_eq!(init["target_registration"]["status"], "registered");
+    assert_eq!(init["worker_registrations"].as_array().unwrap().len(), 3);
+    assert!(init["worker_registrations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|worker| worker["status"] == "registered"));
+    assert_eq!(init["target_pack"]["status"], "generated");
+    assert_eq!(init["heartbeat"]["status"], "ok");
+    assert!(workspace.join("codex-automation.toml").is_file());
+    assert!(workspace.join("targets").join("demo-init.toml").is_file());
+    assert!(app_home.join("codex-automation.sqlite").is_file());
+    assert!(init_codex_home
+        .join("skills")
+        .join("codex-automation-setup")
+        .join("SKILL.md")
+        .is_file());
+    assert!(!target.join(".codex-automation").exists());
+}
+
+#[test]
 fn cli_registers_target_and_records_result() {
     let temp = TempDir::new().expect("tempdir");
     let app_home = temp.path().join("app-state");
@@ -77,9 +167,41 @@ fn cli_registers_target_and_records_result() {
     assert!(workspace.join("targets").is_dir());
     assert!(workspace
         .join("workers")
-        .join("repo-discovery.toml")
+        .join("control-plane.toml")
+        .is_file());
+    assert!(workspace
+        .join("workers")
+        .join("repo-maintainer.toml")
+        .is_file());
+    assert!(workspace.join("workers").join("ops-analyst.toml").is_file());
+    assert!(workspace
+        .join("workers")
+        .join("release-manager.toml")
         .is_file());
     assert!(!workspace.join("worktrees").exists());
+    let workspace_config =
+        std::fs::read_to_string(workspace.join("codex-automation.toml")).expect("workspace config");
+    assert!(workspace_config.contains("[app_state]"));
+    assert!(workspace_config.contains("database = "));
+    assert!(workspace_config.contains("worktrees = "));
+    assert!(workspace_config.contains("logs = "));
+    assert!(workspace_config.contains("artifacts = "));
+    assert!(workspace_config.contains("backups = "));
+
+    let paths = run_json(
+        &[
+            "paths",
+            "--workspace",
+            workspace.to_str().expect("workspace path"),
+        ],
+        &app_home,
+    );
+    assert_eq!(paths["status"], "ok");
+    assert_eq!(
+        paths["app_state"]["state_root"]["path"],
+        app_home.to_str().expect("app home")
+    );
+    assert_eq!(paths["control_workspace"]["config"]["exists"], true);
 
     let target_payload = run_json(
         &[
@@ -99,6 +221,12 @@ fn cli_registers_target_and_records_result() {
     assert_eq!(target_payload["runtime_state_location"], "app_state");
     assert!(workspace.join("targets").join("demo.toml").is_file());
     assert!(!target.join(".codex-automation").exists());
+    let target_config = std::fs::read_to_string(workspace.join("targets").join("demo.toml"))
+        .expect("target config");
+    assert!(target_config.contains("root = "));
+    assert!(target_config.contains("custom_instructions"));
+    assert!(target_config.contains("logs = "));
+    assert!(target_config.contains("artifacts = "));
 
     let worker = run_json(
         &[
@@ -108,18 +236,22 @@ fn cli_registers_target_and_records_result() {
             "--from-file",
             workspace
                 .join("workers")
-                .join("repo-discovery.toml")
+                .join("repo-maintainer.toml")
                 .to_str()
                 .expect("worker path"),
         ],
         &app_home,
     );
     assert_eq!(worker["status"], "registered");
-    assert_eq!(worker["worker_id"], "repo-discovery");
-    assert_eq!(worker["sandbox"], "read-only");
+    assert_eq!(worker["worker_id"], "repo-maintainer");
+    assert_eq!(worker["sandbox"], "workspace-write");
+    assert!(worker["custom_instructions"]
+        .as_str()
+        .expect("custom instructions")
+        .contains("Read the target repository first"));
 
     let workers = run_json(&["worker", "list", "demo"], &app_home);
-    assert_eq!(workers["workers"][0]["id"], "repo-discovery");
+    assert_eq!(workers["workers"][0]["id"], "repo-maintainer");
 
     let pack = run_json(&["target", "pack", "demo"], &app_home);
     assert_eq!(pack["status"], "generated");
@@ -131,7 +263,8 @@ fn cli_registers_target_and_records_result() {
     .expect("target pack should exist");
     assert!(pack_text.contains("suggested_workers"));
     assert!(pack_text.contains(".github/workflows/ci.yml"));
-    assert!(pack_text.contains("test-runner"));
+    assert!(pack_text.contains("repo-maintainer"));
+    assert!(pack_text.contains("ops-analyst"));
     assert!(!pack_text.contains(".env"));
     assert!(!pack_text.contains(".DS_Store"));
     assert!(!pack_text.contains(".runtime"));
@@ -195,19 +328,40 @@ fn cli_registers_target_and_records_result() {
             "--workorder-id",
             "wo-2",
             "--worker",
-            "repo-discovery",
+            "repo-maintainer",
         ],
         &app_home,
     );
     assert_eq!(runner["status"], "package_ready");
     assert_eq!(runner["command"]["mode"], "package");
-    assert_eq!(runner["command"]["worker"]["id"], "repo-discovery");
+    assert_eq!(runner["command"]["worker"]["id"], "repo-maintainer");
     let prompt_path = runner["command"]["package"]["prompt_path"]
         .as_str()
         .expect("prompt path");
     let prompt = std::fs::read_to_string(prompt_path).expect("prompt should exist");
-    assert!(prompt.contains("repo-discovery"));
+    assert!(prompt.contains("repo-maintainer"));
+    assert!(prompt.contains("Custom Instructions"));
+    assert!(prompt.contains("Keep orchestration simple"));
+    assert!(prompt.contains("Follow the target repository AGENTS.md files"));
+    assert!(prompt.contains("Read the target repository first"));
     assert!(prompt.contains("codex-automation result submit demo --workorder-id wo-2"));
+    let rendered = run_json(
+        &[
+            "prompt",
+            "render",
+            "demo",
+            "--workorder-id",
+            "wo-2",
+            "--worker",
+            "repo-maintainer",
+        ],
+        &app_home,
+    );
+    assert_eq!(rendered["status"], "rendered");
+    assert!(rendered["prompt"]
+        .as_str()
+        .expect("rendered prompt")
+        .contains("Read the target repository first"));
     let command_path = runner["command"]["package"]["command_path"]
         .as_str()
         .expect("command path");
@@ -310,7 +464,7 @@ fn cli_heartbeat_generates_pack_and_dispatches_ready_work() {
             "--from-file",
             workspace
                 .join("workers")
-                .join("repo-discovery.toml")
+                .join("repo-maintainer.toml")
                 .to_str()
                 .expect("worker path"),
         ],
@@ -322,7 +476,7 @@ fn cli_heartbeat_generates_pack_and_dispatches_ready_work() {
     assert_eq!(heartbeat["dispatched"][0]["status"], "package_ready");
     assert_eq!(
         heartbeat["dispatched"][0]["command"]["worker"]["id"],
-        "repo-discovery"
+        "repo-maintainer"
     );
     assert!(std::fs::read_to_string(
         heartbeat["target_pack"]["pack_path"]
@@ -398,7 +552,7 @@ printf '%s' '{"workorder_id":"wo-exec","status":"discovery_no_findings","summary
             "--from-file",
             workspace
                 .join("workers")
-                .join("repo-discovery.toml")
+                .join("repo-maintainer.toml")
                 .to_str()
                 .expect("worker path"),
         ],
@@ -428,7 +582,7 @@ printf '%s' '{"workorder_id":"wo-exec","status":"discovery_no_findings","summary
             "--workorder-id",
             "wo-exec",
             "--worker",
-            "repo-discovery",
+            "repo-maintainer",
             "--execute",
         ],
         &app_home,
@@ -486,7 +640,7 @@ sandbox = "read-only"
 approval_policy = "never"
 autonomy_profile = "observe"
 max_concurrency = 1
-instructions = "Inspect only."
+custom_instructions = "Inspect only."
 "#,
     )
     .expect("worker file");

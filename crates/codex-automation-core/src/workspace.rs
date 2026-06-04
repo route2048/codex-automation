@@ -7,6 +7,26 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const WORKSPACE_CONFIG: &str = "codex-automation.toml";
+const CONTROL_WORKSPACE_README: &str = include_str!("../templates/control-workspace/README.md");
+const CONTROL_WORKSPACE_AGENTS: &str = include_str!("../templates/control-workspace/AGENTS.md");
+const DEFAULT_WORKER_TEMPLATES: &[(&str, &str)] = &[
+    (
+        "control-plane.toml",
+        include_str!("../templates/control-workspace/workers/control-plane.toml"),
+    ),
+    (
+        "repo-maintainer.toml",
+        include_str!("../templates/control-workspace/workers/repo-maintainer.toml"),
+    ),
+    (
+        "ops-analyst.toml",
+        include_str!("../templates/control-workspace/workers/ops-analyst.toml"),
+    ),
+    (
+        "release-manager.toml",
+        include_str!("../templates/control-workspace/workers/release-manager.toml"),
+    ),
+];
 
 fn toml_quote(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
@@ -82,67 +102,7 @@ fn workspace_id_from_config(workspace: &Path) -> Result<String> {
 }
 
 fn workspace_readme(workspace_name: &str) -> String {
-    [
-        format!("# {workspace_name}"),
-        String::new(),
-        "This is a thin codex-automation control workspace for Codex App.".to_owned(),
-        String::new(),
-        "Human-facing config lives here. App-managed state, SQLite, worktrees, logs,".to_owned(),
-        "runner data, and artifacts live in the OS application data directory.".to_owned(),
-        String::new(),
-        "Useful commands:".to_owned(),
-        String::new(),
-        "```bash".to_owned(),
-        "codex-automation db doctor --json".to_owned(),
-        "codex-automation target list --json".to_owned(),
-        "codex-automation worker list <target-id> --json".to_owned(),
-        "codex-automation target pack <target-id> --json".to_owned(),
-        "codex-automation heartbeat run <target-id> --json".to_owned(),
-        "codex-automation result list <target-id> --json".to_owned(),
-        "```".to_owned(),
-        String::new(),
-    ]
-    .join("\n")
-}
-
-fn workspace_agents() -> String {
-    [
-        "# AGENTS.md",
-        "",
-        "This directory is the human-facing codex-automation control workspace.",
-        "",
-        "- Keep heavy runtime state out of this directory.",
-        "- Use `codex-automation target list --json` before adding targets.",
-        "- Customize workers under `workers/` and load them with `codex-automation worker add`.",
-        "- Use `codex-automation heartbeat run <target-id> --json` for one bounded control-plane step.",
-        "- Use `codex-automation result submit` to record worker results.",
-        "- Do not edit app-managed SQLite, worktrees, logs, or runner state by hand.",
-        "",
-    ]
-    .join("\n")
-}
-
-fn repo_discovery_worker() -> String {
-    [
-        "version = 1",
-        "",
-        "[worker]",
-        "id = \"repo-discovery\"",
-        "name = \"Repo Discovery\"",
-        "description = \"Read-only repository inspection worker.\"",
-        "skills = [\"repo-discovery\"]",
-        "allowed_workorder_kinds = [\"repo_discovery\", \"log_analysis\"]",
-        "sandbox = \"read-only\"",
-        "approval_policy = \"never\"",
-        "autonomy_profile = \"observe\"",
-        "max_concurrency = 2",
-        "instructions = \"Inspect source, docs, tests, and configuration. Do not edit target files.\"",
-        "",
-        "[config]",
-        "result_contract = \"codex-automation result submit\"",
-        "",
-    ]
-    .join("\n")
+    CONTROL_WORKSPACE_README.replace("{{workspace_name}}", workspace_name)
 }
 
 fn workspace_config_text(
@@ -163,6 +123,9 @@ fn workspace_config_text(
         format!("root = {}", toml_quote(&display_path(&dirs.state_root))),
         format!("database = {}", toml_quote(&display_path(&dirs.database))),
         format!("worktrees = {}", toml_quote(&display_path(&dirs.worktrees))),
+        format!("logs = {}", toml_quote(&display_path(&dirs.logs))),
+        format!("artifacts = {}", toml_quote(&display_path(&dirs.artifacts))),
+        format!("backups = {}", toml_quote(&display_path(&dirs.backups))),
         String::new(),
     ]
     .join("\n"))
@@ -204,11 +167,10 @@ pub fn initialize_workspace(path: &Path, name: Option<&str>, overwrite: bool) ->
         &workspace.join("README.md"),
         &workspace_readme(workspace_name),
     )?;
-    write_text_if_missing(&workspace.join("AGENTS.md"), &workspace_agents())?;
-    write_text_if_missing(
-        &workspace.join("workers").join("repo-discovery.toml"),
-        &repo_discovery_worker(),
-    )?;
+    write_text_if_missing(&workspace.join("AGENTS.md"), CONTROL_WORKSPACE_AGENTS)?;
+    for (file_name, text) in DEFAULT_WORKER_TEMPLATES {
+        write_text_if_missing(&workspace.join("workers").join(file_name), text)?;
+    }
     let now = now_iso();
     let conn = connect()?;
     conn.execute(
@@ -321,13 +283,20 @@ fn target_config_text(
         format!("workspace_id = {}", toml_quote(workspace_id)),
         format!("repo_path = {}", toml_quote(&display_path(repo_path))),
         format!("profile = {}", toml_quote(profile)),
+        "custom_instructions = \"\"\"".to_owned(),
+        "Follow the target repository AGENTS.md files and keep work scoped to the active workorder.".to_owned(),
+        "Record completion through `codex-automation result submit`; do not edit app-state by hand.".to_owned(),
+        "\"\"\"".to_owned(),
         String::new(),
         "[app_state]".to_owned(),
+        format!("root = {}", toml_quote(&display_path(&dirs.state_root))),
         format!("database = {}", toml_quote(&display_path(&dirs.database))),
         format!(
             "worktree_path = {}",
             toml_quote(&display_path(worktree_path))
         ),
+        format!("logs = {}", toml_quote(&display_path(&dirs.logs))),
+        format!("artifacts = {}", toml_quote(&display_path(&dirs.artifacts))),
         String::new(),
     ]
     .join("\n"))

@@ -1,0 +1,22 @@
+version = 1
+
+[worker]
+id = "repo-maintainer"
+kind = "worker"
+name = "Repo Maintainer"
+description = "General repository maintenance worker for discovery, focused fixes, and verification."
+skills = ["repo-maintainer"]
+allowed_workorder_kinds = ["repo_discovery", "maintenance_fix", "test_repair", "code_review"]
+sandbox = "workspace-write"
+approval_policy = "on-request"
+autonomy_profile = "balanced"
+max_concurrency = 2
+custom_instructions = """
+Read the target repository first, including AGENTS.md and local docs.
+Make focused source changes only when the workorder grants edit authority.
+Prefer root-cause fixes and targeted tests over broad refactors.
+Record completion through `codex-automation result submit`.
+"""
+
+[config]
+result_contract = "codex-automation result submit"

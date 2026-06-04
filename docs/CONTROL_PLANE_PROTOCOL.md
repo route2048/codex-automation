@@ -89,24 +89,38 @@ Workers are editable role definitions, not processes. Keep worker TOML in the
 thin control workspace:
 
 ```text
-workers/repo-discovery.toml
+workers/control-plane.toml
+workers/repo-maintainer.toml
+workers/ops-analyst.toml
+workers/release-manager.toml
 ```
 
 Load or update a worker with:
 
 ```bash
-codex-automation worker add <target-id> --from-file workers/repo-discovery.toml
+codex-automation worker add <target-id> --from-file workers/repo-maintainer.toml
 codex-automation worker list <target-id> --json
-codex-automation worker status <target-id> repo-discovery --json
+codex-automation worker status <target-id> repo-maintainer --json
 ```
 
 Required fields live under `[worker]`: `id`, `name`, `description`, `skills`,
 `allowed_workorder_kinds`, `sandbox`, `approval_policy`, `autonomy_profile`,
-and `max_concurrency`. `instructions` and `[config]` are optional extension
-points.
+and `max_concurrency`. `custom_instructions` and `[config]` are optional
+extension points.
+
+`workers/control-plane.toml` is the orchestration actor definition. It lives in
+the same directory for readability, but it is not a runnable worker selected by
+runner dispatch. Target-specific instructions live under
+`targets/<target-id>.toml`.
 
 Runner dispatch with `--worker` validates that the worker allows the selected
 workorder kind before creating a runner package.
+
+Preview the merged prompt without creating runner state:
+
+```bash
+codex-automation prompt render <target-id> --workorder-id <workorder-id> --worker repo-maintainer --json
+```
 
 ## Workorder
 

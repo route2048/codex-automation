@@ -11,6 +11,13 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+#[derive(Debug, Default)]
+struct PromptCustomInstructions {
+    control_plane: String,
+    target: String,
+    worker: String,
+}
+
 fn required(value: &str, name: &str) -> Result<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -75,6 +82,18 @@ fn required_string_array(payload: &Value, key: &str) -> Result<Vec<String>> {
     Ok(out)
 }
 
+fn optional_string_field(payload: &Value, key: &str) -> Result<String> {
+    match payload.get(key) {
+        Some(value) => {
+            let text = value
+                .as_str()
+                .with_context(|| format!("worker.{key} must be a string"))?;
+            Ok(text.trim().to_owned())
+        }
+        None => Ok(String::new()),
+    }
+}
+
 fn worker_payload(payload: &Value) -> Result<&Value> {
     let worker = payload
         .get("worker")
@@ -83,6 +102,82 @@ fn worker_payload(payload: &Value) -> Result<&Value> {
         bail!("worker TOML [worker] must be an object");
     }
     Ok(worker)
+}
+
+fn custom_instructions_from_toml(path: &Path, section: &str) -> Result<String> {
+    if !path.exists() {
+        return Ok(String::new());
+    }
+    let text = fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", display_path(path)))?;
+    let value: toml::Value = text
+        .parse()
+        .with_context(|| format!("TOML is invalid: {}", display_path(path)))?;
+    let Some(section_value) = value.get(section) else {
+        return Ok(String::new());
+    };
+    let Some(instructions_value) = section_value.get("custom_instructions") else {
+        return Ok(String::new());
+    };
+    let instructions = instructions_value.as_str().with_context(|| {
+        format!(
+            "{section}.custom_instructions must be a string in {}",
+            display_path(path)
+        )
+    })?;
+    Ok(instructions.trim().to_owned())
+}
+
+fn control_workspace_path(conn: &Connection, target_id: &str) -> Result<PathBuf> {
+    conn.query_row(
+        "SELECT w.path
+         FROM workspaces w
+         INNER JOIN targets t ON t.workspace_id = w.id
+         WHERE t.id = ?1",
+        params![target_id],
+        |row| row.get::<_, String>(0),
+    )
+    .map(PathBuf::from)
+    .optional()?
+    .with_context(|| format!("control workspace is not registered for target: {target_id}"))
+}
+
+fn prompt_custom_instructions(
+    conn: &Connection,
+    target_id: &str,
+    worker: &Option<Value>,
+) -> Result<PromptCustomInstructions> {
+    let control_workspace = control_workspace_path(conn, target_id)?;
+    let control_plane = custom_instructions_from_toml(
+        &control_workspace.join("workers").join("control-plane.toml"),
+        "worker",
+    )?;
+    let target = custom_instructions_from_toml(
+        &control_workspace
+            .join("targets")
+            .join(format!("{target_id}.toml")),
+        "target",
+    )?;
+    let worker = worker
+        .as_ref()
+        .and_then(|payload| payload.get("custom_instructions"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_owned();
+    Ok(PromptCustomInstructions {
+        control_plane,
+        target,
+        worker,
+    })
+}
+
+fn instruction_block(label: &str, text: &str) -> String {
+    if text.trim().is_empty() {
+        format!("### {label}\n\nNo custom instructions configured.\n")
+    } else {
+        format!("### {label}\n\n{}\n", text.trim())
+    }
 }
 
 fn ensure_worker_matches_workorder(
@@ -200,6 +295,7 @@ fn render_runner_prompt(
     target: &Value,
     workorder: &Value,
     worker: &Option<Value>,
+    custom_instructions: &PromptCustomInstructions,
 ) -> Result<String> {
     let repo_path = target
         .get("repo_path")
@@ -230,6 +326,18 @@ fn render_runner_prompt(
         .unwrap_or("unknown");
     let worker_block = serde_json::to_string_pretty(worker)?;
     let workorder_block = serde_json::to_string_pretty(workorder)?;
+    let control_plane_instructions = instruction_block(
+        "Control Plane (`workers/control-plane.toml`)",
+        &custom_instructions.control_plane,
+    );
+    let target_instructions = instruction_block(
+        "Target (`targets/<target-id>.toml`)",
+        &custom_instructions.target,
+    );
+    let worker_instructions = instruction_block(
+        "Worker (`workers/<worker-id>.toml`)",
+        &custom_instructions.worker,
+    );
     let result_command =
         format!("codex-automation result submit {target_id} --workorder-id {workorder_id}");
     let result_examples = if sandbox == "read-only" || workorder_kind.contains("discovery") {
@@ -269,6 +377,15 @@ You are running as a Codex automation worker.
 - Do not push, deploy, delete data, or start long-running services unless the workorder explicitly grants that authority.
 - Respect the worker sandbox, approval policy, autonomy profile, and instructions below.
 - Record completion through the codex-automation CLI. Do not edit SQLite or app-state files by hand.
+
+## Custom Instructions
+
+Apply these custom instructions in order after system/developer instructions and
+target repository AGENTS.md files.
+
+{control_plane_instructions}
+{target_instructions}
+{worker_instructions}
 
 ## Required Result Contract
 
@@ -504,9 +621,9 @@ fn repo_scan(root: &Path) -> Result<Value> {
         dominant = "mixed".to_owned();
     }
     let suggested_workers = if has_tests {
-        json!(["repo-discovery", "test-runner", "log-analysis"])
+        json!(["repo-maintainer", "ops-analyst", "release-manager"])
     } else {
-        json!(["repo-discovery", "log-analysis"])
+        json!(["repo-maintainer", "ops-analyst"])
     };
     Ok(json!({
         "dominant_profile": dominant,
@@ -682,12 +799,7 @@ pub fn add_worker(conn: &Connection, target_id: &str, payload: Value) -> Result<
         .as_i64()
         .filter(|value| *value > 0)
         .context("worker.max_concurrency must be a positive integer")?;
-    let instructions = worker
-        .get("instructions")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .unwrap_or("")
-        .to_owned();
+    let custom_instructions = optional_string_field(worker, "custom_instructions")?;
     let config = payload.get("config").cloned().unwrap_or_else(|| json!({}));
     if !config.is_object() {
         bail!("worker config must be an object when present");
@@ -725,7 +837,7 @@ pub fn add_worker(conn: &Connection, target_id: &str, payload: Value) -> Result<
             approval_policy,
             autonomy_profile,
             max_concurrency,
-            instructions,
+            custom_instructions,
             serde_json::to_string(&config)?,
             serde_json::to_string(&payload)?,
             now,
@@ -751,6 +863,7 @@ pub fn add_worker(conn: &Connection, target_id: &str, payload: Value) -> Result<
         "approval_policy": approval_policy,
         "autonomy_profile": autonomy_profile,
         "max_concurrency": max_concurrency,
+        "custom_instructions": custom_instructions,
     }))
 }
 
@@ -781,7 +894,7 @@ pub fn list_workers(conn: &Connection, target_id: &str) -> Result<Value> {
             "approval_policy": row.get::<_, String>(8)?,
             "autonomy_profile": row.get::<_, String>(9)?,
             "max_concurrency": row.get::<_, i64>(10)?,
-            "instructions": row.get::<_, String>(11)?,
+            "custom_instructions": row.get::<_, String>(11)?,
             "config": config,
             "created_at": row.get::<_, String>(13)?,
             "updated_at": row.get::<_, String>(14)?,
@@ -822,7 +935,7 @@ pub fn get_worker(conn: &Connection, target_id: &str, worker_id: &str) -> Result
                     "approval_policy": row.get::<_, String>(8)?,
                     "autonomy_profile": row.get::<_, String>(9)?,
                     "max_concurrency": row.get::<_, i64>(10)?,
-                    "instructions": row.get::<_, String>(11)?,
+                    "custom_instructions": row.get::<_, String>(11)?,
                     "config": config,
                     "created_at": row.get::<_, String>(13)?,
                     "updated_at": row.get::<_, String>(14)?,
@@ -1020,7 +1133,7 @@ pub fn run_loop_once(conn: &Connection, target_id: &str, dry_run: bool) -> Resul
             "title": title,
         }));
     }
-    let workorder_id = format!("repo-discovery-{}", Utc::now().timestamp_millis());
+    let workorder_id = format!("repo-maintainer-{}", Utc::now().timestamp_millis());
     if dry_run {
         return Ok(json!({
             "status": "planned",
@@ -1174,6 +1287,7 @@ pub fn dispatch_runner_plan(
     let runner_id = conn.last_insert_rowid();
     let target = target_payload(conn, target_id)?;
     let workorder = get_workorder(conn, target_id, workorder_id)?;
+    let custom_instructions = prompt_custom_instructions(conn, target_id, &worker)?;
     let dirs = ensure_app_dirs()?;
     let target_segment = path_segment(target_id, "target id")?;
     let package_dir = dirs
@@ -1186,7 +1300,14 @@ pub fn dispatch_runner_plan(
     let prompt_path = package_dir.join("prompt.md");
     let command_path = package_dir.join("command.json");
     let result_schema_path = package_dir.join("result.schema.json");
-    let prompt = render_runner_prompt(target_id, workorder_id, &target, &workorder, &worker)?;
+    let prompt = render_runner_prompt(
+        target_id,
+        workorder_id,
+        &target,
+        &workorder,
+        &worker,
+        &custom_instructions,
+    )?;
     fs::write(&prompt_path, prompt)
         .with_context(|| format!("failed to write {}", display_path(&prompt_path)))?;
     fs::write(
@@ -1254,6 +1375,42 @@ pub fn dispatch_runner_plan(
         "workorder_id": workorder_id,
         "runner_id": runner_id,
         "command": command,
+    }))
+}
+
+pub fn render_prompt_for_workorder(
+    conn: &Connection,
+    target_id: &str,
+    workorder_id: &str,
+    worker_id: Option<&str>,
+) -> Result<Value> {
+    ensure_target_exists(conn, target_id)?;
+    ensure_workorder_exists(conn, target_id, workorder_id)?;
+    let worker = worker_id
+        .map(|id| ensure_worker_matches_workorder(conn, target_id, workorder_id, id))
+        .transpose()?;
+    let target = target_payload(conn, target_id)?;
+    let workorder = get_workorder(conn, target_id, workorder_id)?;
+    let custom_instructions = prompt_custom_instructions(conn, target_id, &worker)?;
+    let prompt = render_runner_prompt(
+        target_id,
+        workorder_id,
+        &target,
+        &workorder,
+        &worker,
+        &custom_instructions,
+    )?;
+    Ok(json!({
+        "status": "rendered",
+        "target_id": target_id,
+        "workorder_id": workorder_id,
+        "worker_id": worker.as_ref().and_then(|value| value.get("id")).and_then(Value::as_str),
+        "custom_instructions": {
+            "control_plane": custom_instructions.control_plane,
+            "target": custom_instructions.target,
+            "worker": custom_instructions.worker,
+        },
+        "prompt": prompt,
     }))
 }
 

@@ -50,9 +50,6 @@ def resolve_repo(raw: str | None) -> Path:
     candidates: list[Path] = []
     if raw:
         candidates.append(Path(raw).expanduser())
-    configured = os.environ.get("CODEX_AUTOMATION_REPO")
-    if configured:
-        candidates.append(Path(configured).expanduser())
     cwd = Path.cwd()
     candidates.extend([cwd, *cwd.parents])
     for candidate in candidates:
@@ -61,7 +58,7 @@ def resolve_repo(raw: str | None) -> Path:
             resolved / "crates" / "codex-automation-cli"
         ).is_dir():
             return resolved
-    raise RuntimeError("codex-automation repo not found; pass --repo or set CODEX_AUTOMATION_REPO")
+    raise RuntimeError("codex-automation repo not found; pass --repo or run from the repository")
 
 
 def assert_status(payload: dict[str, Any], expected: str, label: str) -> None:
@@ -84,6 +81,7 @@ def verify(repo: Path, fixture: Path, target_id: str, profile: str, keep_temp: b
 
     install_root = temp_root / "install"
     app_home = temp_root / "state"
+    codex_home = temp_root / "codex-home"
     cargo_target = temp_root / "cargo-target"
     control = temp_root / "control"
     clones = temp_root / "clones"
@@ -113,17 +111,47 @@ def verify(repo: Path, fixture: Path, target_id: str, profile: str, keep_temp: b
         "PATH": f"{install_root / 'bin'}{os.pathsep}{os.environ.get('PATH', '')}",
         "CODEX_AUTOMATION_HOME": str(app_home),
         "CODEX_AUTOMATION_BIN": str(bin_path),
+        "CODEX_HOME": str(codex_home),
     }
 
     doctor = run_json([str(bin_path), "doctor", "--json"], cwd=repo, env=env)
     assert_status(doctor, "ok", "doctor")
     db = run_json([str(bin_path), "db", "doctor", "--json"], cwd=repo, env=env)
     assert_status(db, "ok", "db doctor")
+    skill_install = run_json(
+        [
+            str(bin_path),
+            "skill",
+            "install",
+            "codex-automation-setup",
+            "--codex-home",
+            str(codex_home),
+            "--json",
+        ],
+        cwd=repo,
+        env=env,
+    )
+    assert_status(skill_install, "installed", "skill install")
+    skill_status = run_json(
+        [
+            str(bin_path),
+            "skill",
+            "status",
+            "codex-automation-setup",
+            "--codex-home",
+            str(codex_home),
+            "--json",
+        ],
+        cwd=repo,
+        env=env,
+    )
+    if not skill_status.get("installed"):
+        raise AssertionError("embedded setup skill was not installed")
 
     setup = run_json(
         [
-            sys.executable,
-            str(repo / "scripts" / "setup.py"),
+            str(bin_path),
+            "init",
             str(target),
             "--workspace",
             str(control),
@@ -133,6 +161,7 @@ def verify(repo: Path, fixture: Path, target_id: str, profile: str, keep_temp: b
             target_id,
             "--profile",
             profile,
+            "--json",
         ],
         cwd=repo,
         env=env,
@@ -173,6 +202,8 @@ def verify(repo: Path, fixture: Path, target_id: str, profile: str, keep_temp: b
             "cargo_install": install["returncode"] == 0,
             "doctor": doctor["status"],
             "db_doctor": db["status"],
+            "skill_install": skill_install["status"],
+            "skill_status": skill_status["status"],
             "setup": setup["status"],
             "target_pack": target_pack["status"],
             "heartbeat": heartbeat["status"],

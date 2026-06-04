@@ -44,5 +44,6 @@ itself. This is the maintainer/developer companion to
 - Rust fmt and tests pass.
 - Clean local install reaches `ready_for_handoff`.
 - Docker clean install reaches `ready_for_handoff` when Docker is run.
-- Installed setup skill helper scripts run from outside the source checkout.
-- Fixture dry-run reaches `runner_planned` without dispatching real work.
+- Embedded setup skill installs from the binary and helper scripts run from
+  outside the source checkout.
+- Fixture heartbeat creates a runner package without starting real work.

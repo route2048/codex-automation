@@ -26,6 +26,13 @@ impl AppDirs {
     }
 }
 
+fn path_json(path: &Path) -> Value {
+    json!({
+        "path": display_path(path),
+        "exists": path.exists(),
+    })
+}
+
 pub fn display_path(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
@@ -98,4 +105,36 @@ pub fn ensure_app_dirs() -> Result<AppDirs> {
     std::fs::create_dir_all(&dirs.backups)
         .with_context(|| format!("failed to create {}", display_path(&dirs.backups)))?;
     Ok(dirs)
+}
+
+pub fn paths_summary(workspace: Option<&Path>) -> Result<Value> {
+    let dirs = app_dirs()?;
+    let env_home = env::var_os("CODEX_AUTOMATION_HOME").map(PathBuf::from);
+    let workspace_payload = workspace.map(|path| {
+        json!({
+            "path": display_path(path),
+            "exists": path.exists(),
+            "config": path_json(&path.join("codex-automation.toml")),
+            "targets": path_json(&path.join("targets")),
+            "workers": path_json(&path.join("workers")),
+            "reports": path_json(&path.join("reports")),
+        })
+    });
+    Ok(json!({
+        "status": "ok",
+        "current_dir": display_path(&env::current_dir()?),
+        "env": {
+            "CODEX_AUTOMATION_HOME": env_home.as_ref().map(|path| display_path(path)),
+            "CODEX_AUTOMATION_BIN": env::var_os("CODEX_AUTOMATION_BIN").map(|value| value.to_string_lossy().into_owned()),
+        },
+        "app_state": {
+            "state_root": path_json(&dirs.state_root),
+            "database": path_json(&dirs.database),
+            "worktrees": path_json(&dirs.worktrees),
+            "logs": path_json(&dirs.logs),
+            "artifacts": path_json(&dirs.artifacts),
+            "backups": path_json(&dirs.backups),
+        },
+        "control_workspace": workspace_payload,
+    }))
 }

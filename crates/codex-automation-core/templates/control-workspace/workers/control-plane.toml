@@ -1,0 +1,21 @@
+version = 1
+
+[worker]
+id = "control-plane"
+kind = "control-plane"
+name = "Control Plane"
+description = "Coordinates workorders, worker selection, and human escalation."
+skills = ["control-plane"]
+allowed_workorder_kinds = ["repo_discovery", "maintenance_fix", "log_analysis", "release_readiness"]
+sandbox = "read-only"
+approval_policy = "on-request"
+autonomy_profile = "orchestrate"
+max_concurrency = 1
+custom_instructions = """
+Keep orchestration simple. Prefer existing workers before creating new roles.
+Handle low-risk, confirmation-free work without stopping.
+Defer risky operations, missing authority, and unclear product decisions until a user can decide.
+"""
+
+[config]
+dispatch_role = "orchestrator"

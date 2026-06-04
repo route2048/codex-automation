@@ -5,11 +5,13 @@
 ## Directory Roles
 
 ```text
-codex-automation-src/          # source checkout for this project
 codex-automation/              # thin Codex App control workspace
 target-repo/                   # product or OSS repository being automated
 OS app data/codex-automation/  # SQLite, worktrees, logs, artifacts, backups
 ```
+
+The source checkout is a maintainer concern. Installed users only need the
+binary, a control workspace, target repositories, and app-managed state.
 
 The control workspace exists so a human and Codex App have a clean project to
 open. It should contain only human-facing config and reports:
@@ -20,13 +22,22 @@ codex-automation/
 ├── README.md
 ├── codex-automation.toml
 ├── workers/
-│   └── repo-discovery.toml
+│   ├── control-plane.toml
+│   ├── repo-maintainer.toml
+│   ├── ops-analyst.toml
+│   └── release-manager.toml
 ├── targets/
 │   └── <target-id>.toml
 └── reports/
 ```
 
 Heavy runtime state does not belong there.
+
+Default control-workspace files are stored as normal source templates under
+`crates/codex-automation-core/templates/control-workspace/` and embedded into
+the binary with `include_str!`. This keeps the distributed binary
+self-contained while making worker definitions and generated workspace files
+easy to review in the source tree.
 
 ## App State
 
@@ -50,6 +61,13 @@ backups/
 
 `CODEX_AUTOMATION_HOME` overrides this location for tests and advanced local
 development.
+
+Use `codex-automation paths --json` to inspect the resolved app-state paths.
+When a control workspace is available, include it to see both sides of the app:
+
+```bash
+codex-automation paths --workspace ~/workspace/codex-automation --json
+```
 
 ## SQLite Boundary
 
@@ -77,12 +95,23 @@ and state transitions inside one transaction.
 ## Bootstrap
 
 ```bash
+codex-automation skill install codex-automation-setup --json
+codex-automation init ~/workspace/target-repo --workspace ~/workspace/codex-automation --profile balanced --json
+```
+
+Manual bootstrap uses the same lower-level commands:
+
+```bash
 codex-automation workspace init ~/workspace/codex-automation
+codex-automation paths --workspace ~/workspace/codex-automation --json
 codex-automation target add my-app --repo ~/workspace/target-repo --workspace ~/workspace/codex-automation
 codex-automation target pack my-app --json
-codex-automation worker add my-app --from-file ~/workspace/codex-automation/workers/repo-discovery.toml
+codex-automation worker add my-app --from-file ~/workspace/codex-automation/workers/repo-maintainer.toml
+codex-automation worker add my-app --from-file ~/workspace/codex-automation/workers/ops-analyst.toml
+codex-automation worker add my-app --from-file ~/workspace/codex-automation/workers/release-manager.toml
 codex-automation db doctor --json
 codex-automation heartbeat run my-app --json
+codex-automation prompt render my-app --workorder-id demo --worker repo-maintainer --json
 CODEX_AUTOMATION_ENABLE_RUNNER_EXECUTION=1 codex-automation heartbeat run my-app --execute --json
 codex-automation runner refresh my-app --json
 codex-automation result submit my-app --workorder-id demo --status fixed --summary "..." --next-action no_action

@@ -1,0 +1,21 @@
+version = 1
+
+[worker]
+id = "ops-analyst"
+kind = "worker"
+name = "Ops Analyst"
+description = "Read-only diagnostics worker for logs, incidents, CI output, and operational evidence."
+skills = ["ops-analyst", "log-analysis"]
+allowed_workorder_kinds = ["log_analysis", "incident_analysis", "repo_diagnostics"]
+sandbox = "read-only"
+approval_policy = "never"
+autonomy_profile = "observe"
+max_concurrency = 2
+custom_instructions = """
+Stay read-only. Collect evidence from logs, command output, configuration, and docs.
+Summarize the smallest likely root cause and the next safe action.
+Do not change source, secrets, deployment state, or external systems.
+"""
+
+[config]
+result_contract = "codex-automation result submit"

@@ -7,39 +7,49 @@ to bring a target repository under automation.
 
 1. Inspect this repository with `git status --short`.
 2. Verify the Rust CLI with `cargo test --workspace`.
-3. Run:
-   `cargo run --quiet -p codex-automation-cli --bin codex-automation -- doctor --json`.
-4. Run:
-   `cargo run --quiet -p codex-automation-cli --bin codex-automation -- db doctor --json`.
-5. Pick or create a thin control workspace for Codex App:
+3. Install or expose the binary:
+   `cargo install --path crates/codex-automation-cli --locked`.
+4. Install the bundled setup skill:
+   `codex-automation skill install codex-automation-setup --json`.
+5. Run:
+   `codex-automation doctor --json`.
+6. Run:
+   `codex-automation db doctor --json`.
+7. Prefer the one-command bootstrap:
+   `codex-automation init <target-path-or-git-url> --workspace <control-workspace> --profile balanced --json`.
+8. If manual setup is required, pick or create a thin control workspace for Codex App:
    `codex-automation workspace init <control-workspace> --json`.
-6. Register the target repo without writing runtime state into it:
+9. Register the target repo without writing runtime state into it:
    `codex-automation target add <id> --repo <target-repo> --workspace <control-workspace> --json`.
-7. Load the default worker definition:
-   `codex-automation worker add <id> --from-file <control-workspace>/workers/repo-discovery.toml --json`.
-8. Generate repository context with:
+10. Load the default runnable worker definitions:
+   `codex-automation worker add <id> --from-file <control-workspace>/workers/repo-maintainer.toml --json`.
+   `codex-automation worker add <id> --from-file <control-workspace>/workers/ops-analyst.toml --json`.
+   `codex-automation worker add <id> --from-file <control-workspace>/workers/release-manager.toml --json`.
+11. Generate repository context with:
     `codex-automation target pack <id> --json`.
-9. Start the first bounded control-plane heartbeat with:
+12. Start the first bounded control-plane heartbeat with:
     `codex-automation heartbeat run <id> --json`.
-10. Inspect target registration:
+13. Inspect target registration:
    `codex-automation target status <id> --json`.
-11. Inspect runner packages with:
+14. Inspect runner packages with:
     `codex-automation runner list <id> --json`.
-12. Open the control workspace in Codex App. Continue from `README.md`,
-   `AGENTS.md`, and `targets/<id>.toml`.
-13. Record worker results through:
+15. Open the control workspace in Codex App. Continue from `README.md`,
+   `AGENTS.md`, `workers/control-plane.toml`, and `targets/<id>.toml`.
+16. Record worker results through:
    `codex-automation result submit <id> ... --json`.
-14. Start a detached worker only when explicitly allowed:
+17. Start a detached worker only when explicitly allowed:
     `CODEX_AUTOMATION_ENABLE_RUNNER_EXECUTION=1 codex-automation heartbeat run <id> --execute --json`.
-15. Refresh runner state with:
+18. Refresh runner state with:
     `codex-automation runner refresh <id> --json`.
-16. Use `result submit --from-file result.json` only when a worker has already
+19. Use `result submit --from-file result.json` only when a worker has already
     produced a result artifact.
+20. Use `codex-automation prompt render <id> --workorder-id <workorder> --worker <worker-id> --json`
+    to verify custom instructions before execution.
 
 For a one-command bootstrap from a local path or Git URL:
 
 ```bash
-python3 scripts/setup.py <target-path-or-git-url> --workspace <control-workspace> --profile balanced
+codex-automation init <target-path-or-git-url> --workspace <control-workspace> --profile balanced --json
 ```
 
 ## Handoff Boundary

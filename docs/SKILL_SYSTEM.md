@@ -15,21 +15,31 @@ runs release-readiness checks for this project itself.
 - `codex-automation-dev`: verify Rust tests, clean local install, optional
   Docker install, setup skill installation, and fixture dry-run smoke before
   publication.
-- `repo-discovery`: default read-only worker definition generated under
-  `workers/repo-discovery.toml`.
+- `control-plane`: orchestration instructions generated under
+  `workers/control-plane.toml`.
+- `repo-maintainer`: default runnable worker for discovery, focused fixes, and
+  verification.
+- `ops-analyst`: read-only diagnostics worker for logs, CI, incidents, and
+  operational evidence.
+- `release-manager`: read-only release-readiness worker with approval gates for
+  publishing, deployment, and update decisions.
 
-## Planned Lanes
+## Worker Model
 
-- `repo-discovery`: inspect a target repo and produce findings.
-- `code-maintenance`: perform small approved source, test, and docs fixes.
-- `test-runner`: run target-local verification commands.
-- `log-analysis`: parse logs and propose root-cause investigations.
-- `release-planning`: inspect staging release readiness behind approval gates.
-- `deploy`: prepare deploy workorders behind approval gates.
+Keep the default worker set small. Route most source work through
+`repo-maintainer`, diagnostic evidence gathering through `ops-analyst`, and
+release/update planning through `release-manager`. Add new workers only when a
+target repeatedly needs a distinct sandbox, approval policy, or expertise
+boundary.
 
 Skills are selected through worker definitions. Runner packages include only
 the relevant skill names, worker boundaries, and the current workorder
 contract.
+
+Custom instructions live in the same TOML files that define the actor:
+`workers/control-plane.toml`, runnable `workers/*.toml`, and
+`targets/<id>.toml`. Use `codex-automation prompt render` to preview the
+merged prompt before execution.
 
 Bootstrap registers targets in SQLite and writes human-facing target config
 under `targets/<id>.toml` in the thin control workspace. Future generated target

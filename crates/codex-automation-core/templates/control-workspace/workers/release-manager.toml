@@ -1,0 +1,21 @@
+version = 1
+
+[worker]
+id = "release-manager"
+kind = "worker"
+name = "Release Manager"
+description = "Release-readiness worker for packaging, update checks, deployment planning, and stop gates."
+skills = ["release-manager"]
+allowed_workorder_kinds = ["release_readiness", "deploy_plan", "update_check"]
+sandbox = "read-only"
+approval_policy = "on-request"
+autonomy_profile = "release"
+max_concurrency = 1
+custom_instructions = """
+Treat deploys, pushes, publishing, and destructive operations as explicit approval gates.
+Verify branch state, package state, and documented release contracts before recommending action.
+Prefer a blocked result with evidence over an unsafe release mutation.
+"""
+
+[config]
+result_contract = "codex-automation result submit"

@@ -12,14 +12,17 @@ data directory. Target repositories stay clean during setup.
 
 ## Install
 
-Build or install the binary from a source checkout:
+Install the `codex-automation` binary, then let it write the bundled setup
+skill into Codex:
 
 ```bash
 cargo install --path crates/codex-automation-cli --locked
 codex-automation doctor --json
+codex-automation skill install codex-automation-setup --json
 ```
 
-During development, run it from the workspace:
+Published builds can use the same commands after the binary is installed from a
+release artifact. During development, run it from the workspace:
 
 ```bash
 cargo run --quiet -p codex-automation-cli --bin codex-automation -- doctor --json
@@ -27,15 +30,18 @@ cargo run --quiet -p codex-automation-cli --bin codex-automation -- doctor --jso
 
 ## Layout
 
-For normal use, keep the source checkout, control workspace, app state, and
-target repos separate:
+For normal use, keep the installed binary, control workspace, app state, and
+target repos separate. The control workspace can live in any directory the user
+wants Codex App to open:
 
 ```text
-codex-automation-src/          # source checkout for this project
 codex-automation/              # thin Codex App control workspace
 target-repo/                   # product or OSS repository being automated
 OS app data/codex-automation/  # SQLite, worktrees, logs, artifacts
 ```
+
+Maintainers may also have a separate `codex-automation-src/` source checkout,
+but end users do not need it after installing the binary.
 
 The generated control workspace looks like this:
 
@@ -45,35 +51,46 @@ codex-automation/
 ├── README.md
 ├── codex-automation.toml
 ├── workers/
-│   └── repo-discovery.toml
+│   ├── control-plane.toml
+│   ├── repo-maintainer.toml
+│   ├── ops-analyst.toml
+│   └── release-manager.toml
 ├── targets/
 │   └── <target-id>.toml
 └── reports/
 ```
 
+Generated workspace defaults are maintained as normal source files under
+`crates/codex-automation-core/templates/control-workspace/` and embedded into
+the binary at build time.
+
 ## Bootstrap
 
-Initialize a control workspace and register a target:
+Initialize a control workspace and register a target in one command:
+
+```bash
+codex-automation init <target-path-or-git-url> --workspace ./codex-automation --profile balanced --json
+```
+
+The init command installs or checks the setup skill, clones or resolves the
+target, runs doctor checks, initializes or reuses the thin control workspace,
+registers the target in SQLite, loads the default runnable workers, generates
+a target pack, runs the first heartbeat, and prints handoff information for
+the supervising agent.
+
+Manual bootstrap uses the same primitives:
 
 ```bash
 codex-automation workspace init ./codex-automation
 codex-automation target add my-app --repo ./target-repo --workspace ./codex-automation
-codex-automation worker add my-app --from-file ./codex-automation/workers/repo-discovery.toml
+codex-automation worker add my-app --from-file ./codex-automation/workers/repo-maintainer.toml
+codex-automation worker add my-app --from-file ./codex-automation/workers/ops-analyst.toml
+codex-automation worker add my-app --from-file ./codex-automation/workers/release-manager.toml
 codex-automation target pack my-app --json
 codex-automation heartbeat run my-app --json
 codex-automation db doctor --json
 codex-automation target status my-app --json
 ```
-
-For agent-first setup from a local path or Git URL:
-
-```bash
-python3 scripts/setup.py <target-path-or-git-url> --workspace ./codex-automation --profile balanced
-```
-
-The setup script clones or resolves the target, runs doctor checks, initializes
-or reuses the thin control workspace, registers the target in SQLite, and prints
-handoff information for the supervising agent.
 
 ## Result Recording
 
@@ -100,12 +117,14 @@ codex-automation result list my-app --json
 Register a worker definition from the control workspace:
 
 ```bash
-codex-automation worker add my-app --from-file ./codex-automation/workers/repo-discovery.toml
+codex-automation worker add my-app --from-file ./codex-automation/workers/repo-maintainer.toml
 codex-automation worker list my-app --json
 ```
 
 Worker TOML defines role, skills, allowed workorder kinds, sandbox, approval
-policy, autonomy profile, concurrency, and operating instructions.
+policy, autonomy profile, concurrency, and `custom_instructions`. The
+orchestration instructions live beside them in `workers/control-plane.toml`;
+target-specific instructions live in `targets/<target-id>.toml`.
 
 Create and inspect workorders:
 
@@ -116,6 +135,7 @@ codex-automation workorder create my-app \
   --title "Inspect target repository" \
   --payload-json '{"scope":"read_only"}'
 codex-automation workorder list my-app --json
+codex-automation prompt render my-app --workorder-id inspect-1 --worker repo-maintainer --json
 ```
 
 Run one control-plane step:
@@ -162,11 +182,13 @@ ingest a worker's final JSON result.
   launch, refresh, list, and status
 - approval request/list/record
 - transactional result submission and listing
-- setup skill and agent-first setup script
+- `paths --json` for inspecting control-workspace and app-state locations
+- embedded setup skill installation
+- agent-first `init` command
 
-Upcoming control-plane work should build on the SQLite boundary: skill pack
-export/install, richer workorder generation, and app update flows should become
-first-class CLI operations instead of target-local files.
+Upcoming control-plane work should build on the SQLite boundary: richer
+workorder generation and app update flows should remain first-class CLI
+operations instead of target-local files.
 
 ## Setup Skill
 
@@ -177,17 +199,23 @@ skills/codex-automation-setup/
 ```
 
 Codex does not automatically load skills from a cloned repository. Install the
-skill into `$CODEX_HOME/skills` with the built-in `skill-installer`, then
-restart Codex:
+skill into `$CODEX_HOME/skills` from the `codex-automation` binary, then restart
+Codex:
 
-```text
-Install the codex-automation-setup skill from github.com/<owner>/codex-automation at skills/codex-automation-setup.
+```bash
+codex-automation skill install codex-automation-setup --json
 ```
 
 After restart, ask:
 
 ```text
 Use codex-automation-setup for this repository.
+```
+
+To inspect where a setup wrote control and app-state files:
+
+```bash
+codex-automation paths --workspace ./codex-automation --json
 ```
 
 ## Test
