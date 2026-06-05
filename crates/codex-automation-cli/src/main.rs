@@ -588,13 +588,13 @@ fn run(command: Command) -> Result<Value> {
 
 fn run_update(args: UpdateArgs) -> Result<Value> {
     let workspace_path = args.workspace.as_deref();
-    let paths = paths_summary(workspace_path)?;
     let database = if args.check {
         storage::db_doctor()?
     } else {
         storage::db_migrate()?
     };
     let database_check = storage::db_doctor()?;
+    let paths = paths_summary(workspace_path)?;
     let workspace_status = if let Some(path) = workspace_path {
         Some(workspace::workspace_status(path)?)
     } else {
