@@ -34,57 +34,23 @@ fn run_failure(args: &[&str], app_home: &Path, extra_env: &[(&str, &str)]) -> St
 }
 
 #[test]
-fn cli_installs_embedded_setup_skill_and_init_bootstraps_workspace() {
+fn cli_init_bootstraps_workspace_without_embedded_skill() {
     let temp = TempDir::new().expect("tempdir");
     let app_home = temp.path().join("app-state");
-    let codex_home = temp.path().join("codex-home");
     let init_codex_home = temp.path().join("init-codex-home");
     let workspace = temp.path().join("codex-automation");
     let target = temp.path().join("target-repo");
     std::fs::create_dir(&target).expect("target repo dir");
     std::fs::write(target.join("README.md"), "demo").expect("readme");
 
-    let codex_home_text = codex_home.to_str().expect("codex home");
-    let before = run_json_with_env(
-        &[
-            "skill",
-            "status",
-            "codex-automation-setup",
-            "--codex-home",
-            codex_home_text,
-        ],
-        &app_home,
-        &[("CODEX_HOME", codex_home_text)],
-    );
-    assert_eq!(before["status"], "ok");
-    assert_eq!(before["installed"], false);
-
-    let installed = run_json_with_env(
-        &[
-            "skill",
-            "install",
-            "codex-automation-setup",
-            "--codex-home",
-            codex_home_text,
-        ],
-        &app_home,
-        &[("CODEX_HOME", codex_home_text)],
-    );
-    assert_eq!(installed["status"], "installed");
-    assert_eq!(installed["restart_required"], true);
-    assert!(codex_home
-        .join("skills")
-        .join("codex-automation-setup")
-        .join("SKILL.md")
-        .is_file());
-    assert!(codex_home
-        .join("skills")
-        .join("codex-automation-setup")
-        .join("scripts")
-        .join("setup.py")
-        .is_file());
-
     let init_codex_home_text = init_codex_home.to_str().expect("init codex home");
+    let setup_skill = init_codex_home
+        .join("skills")
+        .join("codex-automation-setup");
+    std::fs::create_dir_all(&setup_skill).expect("setup skill dir");
+    std::fs::write(setup_skill.join("SKILL.md"), "name: codex-automation-setup")
+        .expect("setup skill marker");
+
     let init = run_json_with_env(
         &[
             "init",
@@ -101,7 +67,7 @@ fn cli_installs_embedded_setup_skill_and_init_bootstraps_workspace() {
     );
     assert_eq!(init["status"], "ready_for_handoff");
     assert_eq!(init["target_id"], "demo-init");
-    assert_eq!(init["skill_install"]["status"], "installed");
+    assert_eq!(init["setup_skill"]["status"], "external");
     assert_eq!(init["workspace_action"], "initialized");
     assert_eq!(init["target_registration"]["status"], "registered");
     assert_eq!(init["worker_registrations"].as_array().unwrap().len(), 3);
@@ -115,11 +81,7 @@ fn cli_installs_embedded_setup_skill_and_init_bootstraps_workspace() {
     assert!(workspace.join("codex-automation.toml").is_file());
     assert!(workspace.join("targets").join("demo-init.toml").is_file());
     assert!(app_home.join("codex-automation.sqlite").is_file());
-    assert!(init_codex_home
-        .join("skills")
-        .join("codex-automation-setup")
-        .join("SKILL.md")
-        .is_file());
+    assert!(setup_skill.join("SKILL.md").is_file());
     assert!(!target.join(".codex-automation").exists());
 
     let uninstall_plan = run_json_with_env(

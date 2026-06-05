@@ -1,5 +1,3 @@
-mod embedded_skill;
-
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use codex_automation_core::app_dirs::{app_dirs, display_path, ensure_app_dirs, paths_summary};
@@ -16,6 +14,7 @@ const DEFAULT_RUNNER_WORKERS: &[&str] = &[
     "ops-analyst.toml",
     "release-manager.toml",
 ];
+const SETUP_SKILL_NAME: &str = "codex-automation-setup";
 
 #[derive(Debug, Parser)]
 #[command(name = "codex-automation")]
@@ -31,10 +30,6 @@ struct Cli {
 enum Command {
     Init(InitArgs),
     Uninstall(UninstallArgs),
-    Skill {
-        #[command(subcommand)]
-        command: SkillCommand,
-    },
     Doctor,
     Paths(PathsArgs),
     Db {
@@ -100,10 +95,6 @@ struct InitArgs {
     profile: String,
     #[arg(long)]
     overwrite_workspace: bool,
-    #[arg(long)]
-    skip_skill_install: bool,
-    #[arg(long)]
-    overwrite_skill: bool,
 }
 
 #[derive(Debug, Args)]
@@ -122,32 +113,6 @@ struct UninstallArgs {
     yes: bool,
     #[arg(long)]
     dry_run: bool,
-}
-
-#[derive(Debug, Subcommand)]
-enum SkillCommand {
-    Install(SkillInstallArgs),
-    Status(SkillStatusArgs),
-}
-
-#[derive(Debug, Args)]
-struct SkillInstallArgs {
-    #[arg(default_value = embedded_skill::SETUP_SKILL_NAME)]
-    skill: String,
-    #[arg(long)]
-    codex_home: Option<PathBuf>,
-    #[arg(long)]
-    overwrite: bool,
-    #[arg(long)]
-    dry_run: bool,
-}
-
-#[derive(Debug, Args)]
-struct SkillStatusArgs {
-    #[arg(default_value = embedded_skill::SETUP_SKILL_NAME)]
-    skill: String,
-    #[arg(long)]
-    codex_home: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -432,17 +397,6 @@ fn run(command: Command) -> Result<Value> {
     match command {
         Command::Init(args) => run_init(args),
         Command::Uninstall(args) => run_uninstall(args),
-        Command::Skill { command } => match command {
-            SkillCommand::Install(args) => embedded_skill::install_setup_skill(
-                &args.skill,
-                args.codex_home.as_deref(),
-                args.overwrite,
-                args.dry_run,
-            ),
-            SkillCommand::Status(args) => {
-                embedded_skill::setup_skill_status(&args.skill, args.codex_home.as_deref())
-            }
-        },
         Command::Doctor => {
             let dirs = ensure_app_dirs()?;
             Ok(json!({"status": "ok", "app_state": dirs.as_json()}))
@@ -671,11 +625,7 @@ fn run_uninstall(args: UninstallArgs) -> Result<Value> {
     if include_skills {
         actions.push(json!({
             "label": "setup_skill",
-            "action": embedded_skill::uninstall_setup_skill(
-                embedded_skill::SETUP_SKILL_NAME,
-                args.codex_home.as_deref(),
-                dry_run,
-            )?,
+            "action": remove_setup_skill_action(args.codex_home.as_deref(), dry_run)?,
         }));
     }
     if include_workspace {
@@ -767,6 +717,44 @@ fn remove_app_state_action(path: &Path, dry_run: bool) -> Result<Value> {
     }))
 }
 
+fn remove_setup_skill_action(codex_home: Option<&Path>, dry_run: bool) -> Result<Value> {
+    let codex_home = resolve_codex_home(codex_home)?;
+    let destination = codex_home.join("skills").join(SETUP_SKILL_NAME);
+    let existed = destination.exists();
+    if !dry_run && existed {
+        remove_existing_path(&destination)?;
+    }
+    Ok(json!({
+        "status": if dry_run { "planned" } else { "ok" },
+        "skill": SETUP_SKILL_NAME,
+        "codex_home": display_path(&codex_home),
+        "path": display_path(&destination),
+        "existed": existed,
+        "removed": existed && !dry_run,
+        "dry_run": dry_run,
+        "restart_required": existed && !dry_run,
+    }))
+}
+
+fn resolve_codex_home(explicit: Option<&Path>) -> Result<PathBuf> {
+    if let Some(path) = explicit {
+        return expand_path(path);
+    }
+    if let Some(raw) = std::env::var_os("CODEX_HOME") {
+        if raw.is_empty() {
+            bail!("CODEX_HOME is set but empty");
+        }
+        return Ok(PathBuf::from(raw));
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        return Ok(PathBuf::from(home).join(".codex"));
+    }
+    if let Some(profile) = std::env::var_os("USERPROFILE") {
+        return Ok(PathBuf::from(profile).join(".codex"));
+    }
+    bail!("CODEX_HOME, HOME, or USERPROFILE is required to resolve Codex skills")
+}
+
 fn app_state_marker_hits(path: &Path) -> Vec<String> {
     [
         "codex-automation.sqlite",
@@ -843,20 +831,6 @@ fn run_init(args: InitArgs) -> Result<Value> {
         workspace::slugify_id(name)
     };
 
-    let skill_install = if args.skip_skill_install {
-        json!({
-            "status": "skipped",
-            "skill": embedded_skill::SETUP_SKILL_NAME,
-            "reason": "--skip-skill-install was set",
-        })
-    } else {
-        embedded_skill::install_setup_skill(
-            embedded_skill::SETUP_SKILL_NAME,
-            None,
-            args.overwrite_skill,
-            false,
-        )?
-    };
     let doctor_dirs = ensure_app_dirs()?;
     let doctor = json!({"status": "ok", "app_state": doctor_dirs.as_json()});
     let db = storage::db_doctor()?;
@@ -913,7 +887,11 @@ fn run_init(args: InitArgs) -> Result<Value> {
         "status": "ready_for_handoff",
         "target": target_record,
         "target_id": resolved_target_id,
-        "skill_install": skill_install,
+        "setup_skill": {
+            "status": "external",
+            "skill": SETUP_SKILL_NAME,
+            "reason": "setup skill is distributed as a release asset and is not embedded in the binary",
+        },
         "doctor": doctor,
         "db": db,
         "workspace_action": workspace_action,

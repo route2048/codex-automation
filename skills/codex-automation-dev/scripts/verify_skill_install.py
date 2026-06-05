@@ -107,21 +107,10 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
     }
     operations: dict[str, Any] = {}
     if args.install_setup_skill:
-        command = [
-            str(binary),
-            "skill",
-            "install",
-            "codex-automation-setup",
-            "--codex-home",
-            str(codex_home),
-            "--json",
-        ]
-        if args.overwrite:
-            command.insert(-1, "--overwrite")
-        operations["codex-automation-setup"] = run_json(
-            command,
-            cwd=repo,
-            env=env,
+        operations["codex-automation-setup"] = copy_skill(
+            repo / "skills" / "codex-automation-setup",
+            skills_root / "codex-automation-setup",
+            args.overwrite,
         )
     if args.install_dev_skill:
         operations["codex-automation-dev"] = copy_skill(
@@ -135,6 +124,7 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
             "SKILL.md",
             "agents/openai.yaml",
             "scripts/doctor.py",
+            "scripts/install_binary.py",
             "scripts/setup.py",
             "scripts/update.py",
         ],

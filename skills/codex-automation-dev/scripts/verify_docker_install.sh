@@ -60,12 +60,14 @@ export CODEX_AUTOMATION_HOME=/work/codex-state
 export CODEX_AUTOMATION_BIN=/work/codex-install/bin/codex-automation
 export CODEX_HOME=/work/codex-home
 
-codex-automation doctor --json
+mkdir -p "$CODEX_HOME/skills"
+cp -R skills/codex-automation-setup "$CODEX_HOME/skills/codex-automation-setup"
+
+python3 "$CODEX_HOME/skills/codex-automation-setup/scripts/doctor.py"
 codex-automation db doctor --json
-codex-automation skill install codex-automation-setup --json
 
 cp -R tests/fixtures/node-package /work/target
-codex-automation init /work/target \
+python3 "$CODEX_HOME/skills/codex-automation-setup/scripts/setup.py" /work/target \
   --workspace /work/control \
   --clone-dir /work/clones \
   --target-id docker-node \

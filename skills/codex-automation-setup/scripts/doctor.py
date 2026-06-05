@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
+from pathlib import Path
+
+from install_binary import ensure_binary
 
 
 def automation_command(*args: str) -> list[str]:
@@ -13,10 +15,14 @@ def automation_command(*args: str) -> list[str]:
     configured = os.environ.get("CODEX_AUTOMATION_BIN")
     if configured:
         return [configured, *args]
-    installed = shutil.which("codex-automation")
-    if installed:
-        return [installed, *args]
-    raise RuntimeError("codex-automation binary is unavailable; install it or set CODEX_AUTOMATION_BIN")
+    installed = ensure_binary(
+        repo=os.environ.get("CODEX_AUTOMATION_REPO", "route2048/codex-automation"),
+        version=os.environ.get("CODEX_AUTOMATION_VERSION", "latest"),
+        install_dir=Path(os.environ["CODEX_AUTOMATION_INSTALL_DIR"]).expanduser()
+        if os.environ.get("CODEX_AUTOMATION_INSTALL_DIR")
+        else None,
+    )
+    return [str(installed), *args]
 
 
 def main() -> int:

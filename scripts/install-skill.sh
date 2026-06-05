@@ -3,25 +3,26 @@ set -eu
 
 REPO="route2048/codex-automation"
 VERSION="latest"
-INSTALL_DIR="${HOME}/.local/bin"
+CODEX_HOME="${CODEX_HOME:-${HOME}/.codex}"
+SKILL_NAME="codex-automation-setup"
+ARCHIVE="codex-automation-setup-skill.tar.gz"
 
 usage() {
   cat <<'USAGE'
-Install codex-automation from GitHub Releases.
+Install the codex-automation setup skill from GitHub Releases.
 
 Usage:
-  install.sh [--version vX.Y.Z] [--install-dir DIR] [--repo owner/name]
+  install-skill.sh [--version vX.Y.Z] [--codex-home DIR] [--repo owner/name]
 
 Environment:
-  CODEX_AUTOMATION_REPO         Override the GitHub repository.
-  CODEX_AUTOMATION_VERSION      Override the release tag.
-  CODEX_AUTOMATION_INSTALL_DIR  Override the destination directory.
+  CODEX_AUTOMATION_REPO      Override the GitHub repository.
+  CODEX_AUTOMATION_VERSION   Override the release tag.
+  CODEX_HOME                 Override the Codex home directory.
 USAGE
 }
 
 REPO="${CODEX_AUTOMATION_REPO:-$REPO}"
 VERSION="${CODEX_AUTOMATION_VERSION:-$VERSION}"
-INSTALL_DIR="${CODEX_AUTOMATION_INSTALL_DIR:-$INSTALL_DIR}"
 
 require_value() {
   if [ "$#" -lt 2 ]; then
@@ -42,9 +43,9 @@ while [ "$#" -gt 0 ]; do
       VERSION="$2"
       shift 2
       ;;
-    --install-dir)
+    --codex-home)
       require_value "$@"
-      INSTALL_DIR="$2"
+      CODEX_HOME="$2"
       shift 2
       ;;
     -h|--help)
@@ -58,28 +59,6 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
-
-os="$(uname -s)"
-arch="$(uname -m)"
-
-case "$os:$arch" in
-  Darwin:arm64)
-    target="aarch64-apple-darwin"
-    archive="codex-automation-aarch64-apple-darwin.tar.gz"
-    ;;
-  Darwin:x86_64)
-    target="x86_64-apple-darwin"
-    archive="codex-automation-x86_64-apple-darwin.tar.gz"
-    ;;
-  Linux:x86_64|Linux:amd64)
-    target="x86_64-unknown-linux-gnu"
-    archive="codex-automation-x86_64-unknown-linux-gnu.tar.gz"
-    ;;
-  *)
-    echo "unsupported platform: $os $arch" >&2
-    exit 1
-    ;;
-esac
 
 if command -v curl >/dev/null 2>&1; then
   fetch() {
@@ -106,14 +85,15 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-archive_path="${tmp_dir}/${archive}"
+archive_path="${tmp_dir}/${ARCHIVE}"
 checksum_path="${tmp_dir}/SHA256SUMS"
+package_dir="${tmp_dir}/pkg"
 
-echo "Downloading ${archive} from ${REPO} (${VERSION})"
-fetch "${base_url}/${archive}" "$archive_path"
+echo "Downloading ${ARCHIVE} from ${REPO} (${VERSION})"
+fetch "${base_url}/${ARCHIVE}" "$archive_path"
 
 if fetch "${base_url}/SHA256SUMS" "$checksum_path" >/dev/null 2>&1; then
-  expected="$(grep " ${archive}\$" "$checksum_path" | awk '{print $1}')"
+  expected="$(grep " ${ARCHIVE}\$" "$checksum_path" | awk '{print $1}')"
   if [ -n "$expected" ]; then
     if command -v shasum >/dev/null 2>&1; then
       actual="$(shasum -a 256 "$archive_path" | awk '{print $1}')"
@@ -124,20 +104,23 @@ if fetch "${base_url}/SHA256SUMS" "$checksum_path" >/dev/null 2>&1; then
       actual="$expected"
     fi
     if [ "$actual" != "$expected" ]; then
-      echo "checksum mismatch for ${archive}" >&2
+      echo "checksum mismatch for ${ARCHIVE}" >&2
       exit 1
     fi
   fi
 fi
 
-mkdir -p "$tmp_dir/pkg" "$INSTALL_DIR"
-tar -xzf "$archive_path" -C "$tmp_dir/pkg"
-if [ ! -f "$tmp_dir/pkg/codex-automation" ]; then
-  echo "archive did not contain codex-automation binary for ${target}" >&2
+mkdir -p "$package_dir" "$CODEX_HOME/skills"
+tar -xzf "$archive_path" -C "$package_dir"
+if [ ! -f "$package_dir/${SKILL_NAME}/SKILL.md" ]; then
+  echo "archive did not contain ${SKILL_NAME}/SKILL.md" >&2
   exit 1
 fi
-install -m 0755 "$tmp_dir/pkg/codex-automation" "$INSTALL_DIR/codex-automation"
 
-echo "Installed codex-automation to ${INSTALL_DIR}/codex-automation"
+rm -rf "$CODEX_HOME/skills/${SKILL_NAME}"
+cp -R "$package_dir/${SKILL_NAME}" "$CODEX_HOME/skills/${SKILL_NAME}"
+
+echo "Installed ${SKILL_NAME} to ${CODEX_HOME}/skills/${SKILL_NAME}"
 echo "Next:"
-echo "  codex-automation doctor --json"
+echo "  Start a new Codex thread and ask:"
+echo "  Use \$codex-automation-setup to enable codex-automation for this repository."

@@ -68,6 +68,14 @@ def assert_status(payload: dict[str, Any], expected: str, label: str) -> None:
         raise AssertionError(f"{label} status is {actual!r}, expected {expected!r}")
 
 
+def copy_skill(source: Path, destination: Path) -> dict[str, Any]:
+    """Install a skill directory into a temporary CODEX_HOME."""
+    if destination.exists():
+        shutil.rmtree(destination)
+    shutil.copytree(source, destination, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    return {"status": "installed", "path": str(destination)}
+
+
 def verify(repo: Path, fixture: Path, target_id: str, profile: str, keep_temp: bool) -> dict[str, Any]:
     """Run the clean install smoke."""
     temp_context = tempfile.TemporaryDirectory(prefix="codex-automation-clean-")
@@ -114,44 +122,22 @@ def verify(repo: Path, fixture: Path, target_id: str, profile: str, keep_temp: b
         "CODEX_HOME": str(codex_home),
     }
 
-    doctor = run_json([str(bin_path), "doctor", "--json"], cwd=repo, env=env)
+    skill_root = codex_home / "skills" / "codex-automation-setup"
+    skill_install = copy_skill(repo / "skills" / "codex-automation-setup", skill_root)
+
+    doctor = run_json(
+        [sys.executable, str(skill_root / "scripts" / "doctor.py")],
+        cwd=temp_root,
+        env=env,
+    )
     assert_status(doctor, "ok", "doctor")
     db = run_json([str(bin_path), "db", "doctor", "--json"], cwd=repo, env=env)
     assert_status(db, "ok", "db doctor")
-    skill_install = run_json(
-        [
-            str(bin_path),
-            "skill",
-            "install",
-            "codex-automation-setup",
-            "--codex-home",
-            str(codex_home),
-            "--json",
-        ],
-        cwd=repo,
-        env=env,
-    )
-    assert_status(skill_install, "installed", "skill install")
-    skill_status = run_json(
-        [
-            str(bin_path),
-            "skill",
-            "status",
-            "codex-automation-setup",
-            "--codex-home",
-            str(codex_home),
-            "--json",
-        ],
-        cwd=repo,
-        env=env,
-    )
-    if not skill_status.get("installed"):
-        raise AssertionError("embedded setup skill was not installed")
 
     setup = run_json(
         [
-            str(bin_path),
-            "init",
+            sys.executable,
+            str(skill_root / "scripts" / "setup.py"),
             str(target),
             "--workspace",
             str(control),
@@ -203,7 +189,6 @@ def verify(repo: Path, fixture: Path, target_id: str, profile: str, keep_temp: b
             "doctor": doctor["status"],
             "db_doctor": db["status"],
             "skill_install": skill_install["status"],
-            "skill_status": skill_status["status"],
             "setup": setup["status"],
             "target_pack": target_pack["status"],
             "heartbeat": heartbeat["status"],

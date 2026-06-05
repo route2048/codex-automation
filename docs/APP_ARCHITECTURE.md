@@ -95,7 +95,7 @@ and state transitions inside one transaction.
 ## Bootstrap
 
 ```bash
-codex-automation skill install codex-automation-setup --json
+curl -fsSL https://github.com/route2048/codex-automation/releases/latest/download/install-skill.sh | sh
 codex-automation init ~/workspace/target-repo --workspace ~/workspace/codex-automation --profile balanced --json
 ```
 
@@ -123,9 +123,10 @@ Runner logs live under OS app-state `logs/runners/`.
 
 ## Install And Uninstall Boundary
 
-Released users install the binary from GitHub Releases, `scripts/install.sh`,
-Homebrew, or another package manager. The binary can then install the embedded
-setup skill and initialize targets.
+Released users install the setup skill from GitHub Releases with
+`scripts/install-skill.sh`. The skill installs the released binary when needed
+and then initializes targets. `scripts/install.sh` remains a binary-only
+installer for package-manager-style workflows.
 
 `codex-automation uninstall` owns only codex-automation-created runtime files:
 

@@ -13,8 +13,8 @@ runs release-readiness checks for this project itself.
 - `codex-automation-setup`: install, doctor, initialize a thin control
   workspace, register target repos, and explain result submission.
 - `codex-automation-dev`: verify Rust tests, clean local install, optional
-  Docker install, setup skill installation, and fixture dry-run smoke before
-  publication.
+  Docker install, release-packaged setup skill installation, and fixture
+  dry-run smoke before publication.
 - `control-plane`: orchestration instructions generated under
   `workers/control-plane.toml`.
 - `repo-maintainer`: default runnable worker for discovery, focused fixes, and

@@ -7,12 +7,12 @@ to bring a target repository under automation.
 
 1. If working from a source checkout, inspect this repository with
    `git status --short` and verify the Rust CLI with `cargo test --workspace`.
-2. If installing as an end user, install the release binary:
-   `curl -fsSL https://raw.githubusercontent.com/route2048/codex-automation/main/scripts/install.sh | sh`.
+2. If installing as an end user, install the setup skill:
+   `curl -fsSL https://github.com/route2048/codex-automation/releases/latest/download/install-skill.sh | sh`.
 3. If developing from source, install or expose the binary:
    `cargo install --path crates/codex-automation-cli --locked`.
-4. Install the bundled setup skill:
-   `codex-automation skill install codex-automation-setup --json`.
+4. If the binary is not available, let the setup skill install it:
+   `python3 <codex-automation-setup>/scripts/install_binary.py --json`.
 5. Run:
    `codex-automation doctor --json`.
 6. Run:

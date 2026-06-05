@@ -10,24 +10,24 @@ The app keeps human-facing configuration in a thin Codex App workspace, while
 durable runtime state lives in a local SQLite database under the OS application
 data directory. Target repositories stay clean during setup.
 
-## Install
+## Install The Setup Skill
 
-Most users install a released binary. The source checkout is only needed for
-contributors and maintainers.
-
-Install on macOS or Linux from GitHub Releases:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/route2048/codex-automation/main/scripts/install.sh | sh
-```
-
-Or download a release archive manually and place `codex-automation` on `PATH`.
-Then let the binary write the bundled setup skill into Codex:
+Most users start by installing the Codex setup skill. The skill can then
+install the released binary, initialize the control workspace, register a
+target repository, and hand off to Codex.
 
 ```bash
-codex-automation doctor --json
-codex-automation skill install codex-automation-setup --json
+curl -fsSL https://github.com/route2048/codex-automation/releases/latest/download/install-skill.sh | sh
 ```
+
+Restart or open a new Codex thread, then ask:
+
+```text
+Use $codex-automation-setup to enable codex-automation for this repository.
+```
+
+The setup skill installs the binary from GitHub Releases when
+`codex-automation` is not already available on `PATH`.
 
 Developers can install from source:
 
@@ -85,11 +85,10 @@ Initialize a control workspace and register a target in one command:
 codex-automation init <target-path-or-git-url> --workspace ./codex-automation --profile balanced --json
 ```
 
-The init command installs or checks the setup skill, clones or resolves the
-target, runs doctor checks, initializes or reuses the thin control workspace,
-registers the target in SQLite, loads the default runnable workers, generates
-a target pack, runs the first heartbeat, and prints handoff information for
-the supervising agent.
+The init command clones or resolves the target, runs doctor checks,
+initializes or reuses the thin control workspace, registers the target in
+SQLite, loads the default runnable workers, generates a target pack, runs the
+first heartbeat, and prints handoff information for the supervising agent.
 
 Manual bootstrap uses the same primitives:
 
@@ -223,7 +222,6 @@ ingest a worker's final JSON result.
 - safe uninstall planning/removal for app-state, setup skill, and generated
   control workspaces
 - `paths --json` for inspecting control-workspace and app-state locations
-- embedded setup skill installation
 - agent-first `init` command
 
 Upcoming control-plane work should build on the SQLite boundary: richer
@@ -238,12 +236,11 @@ The setup skill lives at:
 skills/codex-automation-setup/
 ```
 
-Codex does not automatically load skills from a cloned repository. Install the
-skill into `$CODEX_HOME/skills` from the `codex-automation` binary, then restart
-Codex:
+Install the skill into `$CODEX_HOME/skills` from GitHub Releases, then restart
+or open a new Codex thread:
 
 ```bash
-codex-automation skill install codex-automation-setup --json
+curl -fsSL https://github.com/route2048/codex-automation/releases/latest/download/install-skill.sh | sh
 ```
 
 After restart, ask:

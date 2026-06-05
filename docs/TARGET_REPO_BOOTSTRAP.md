@@ -37,12 +37,14 @@ The target repository is not modified by `workspace init` or `target add`.
 
 ## Commands
 
-Install the binary from GitHub Releases on macOS or Linux:
+Install the setup skill from GitHub Releases:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/route2048/codex-automation/main/scripts/install.sh | sh
-codex-automation skill install codex-automation-setup --json
+curl -fsSL https://github.com/route2048/codex-automation/releases/latest/download/install-skill.sh | sh
 ```
+
+The setup skill installs the released binary when `codex-automation` is not
+already available on `PATH`.
 
 One-command setup:
 

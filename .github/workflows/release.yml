@@ -70,9 +70,41 @@ jobs:
           path: ${{ matrix.archive }}
           if-no-files-found: error
 
+  package-skill:
+    name: Package setup skill
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package skill
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            -C skills \
+            -czf codex-automation-setup-skill.tar.gz \
+            codex-automation-setup
+          cp scripts/install-skill.sh install-skill.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codex-automation-setup-skill.tar.gz
+          path: codex-automation-setup-skill.tar.gz
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: install-skill.sh
+          path: install-skill.sh
+          if-no-files-found: error
+
   release:
     name: Publish GitHub Release
-    needs: build
+    needs:
+      - build
+      - package-skill
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -87,7 +119,7 @@ jobs:
           while IFS= read -r -d '' file; do
             checksum="$(sha256sum "$file" | awk '{print $1}')"
             printf '%s  %s\n' "$checksum" "$(basename "$file")" >> SHA256SUMS
-          done < <(find dist -type f \( -name '*.tar.gz' -o -name '*.zip' \) -print0 | sort -z)
+          done < <(find dist -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name 'install-skill.sh' \) -print0 | sort -z)
           cat SHA256SUMS
 
       - uses: softprops/action-gh-release@v2
@@ -95,5 +127,6 @@ jobs:
           files: |
             dist/**/*.tar.gz
             dist/**/*.zip
+            dist/**/install-skill.sh
             SHA256SUMS
           generate_release_notes: true
