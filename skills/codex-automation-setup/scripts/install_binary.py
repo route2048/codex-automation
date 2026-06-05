@@ -183,7 +183,7 @@ def install_binary(
     }
 
 
-def find_binary() -> Path | None:
+def find_binary(preferred_dir: Path | None = None) -> Path | None:
     """Return an existing binary path, if available."""
     configured = os.environ.get("CODEX_AUTOMATION_BIN")
     if configured:
@@ -191,6 +191,11 @@ def find_binary() -> Path | None:
         if path.is_file():
             return path
         raise RuntimeError(f"CODEX_AUTOMATION_BIN does not exist: {path}")
+    if preferred_dir:
+        _, _, binary_name = platform_asset()
+        preferred = preferred_dir / binary_name
+        if preferred.is_file():
+            return preferred
     found = shutil.which("codex-automation")
     return Path(found) if found else None
 
@@ -203,14 +208,15 @@ def ensure_binary(
     force: bool = False,
 ) -> Path:
     """Return an existing binary or install one from GitHub Releases."""
+    destination = install_dir or default_install_dir()
     if not force:
-        existing = find_binary()
+        existing = find_binary(destination)
         if existing:
             return existing
     payload = install_binary(
         repo=repo,
         version=version,
-        install_dir=install_dir or default_install_dir(),
+        install_dir=destination,
         force=force,
     )
     return Path(str(payload["binary"]))
