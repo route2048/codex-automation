@@ -121,6 +121,21 @@ The target repository is not modified during this bootstrap path. Runner
 packages are created under the OS app-state `artifacts/runners/` directory.
 Runner logs live under OS app-state `logs/runners/`.
 
+## Update
+
+The setup skill is the update entrypoint. It refreshes the release binary and
+then delegates local state work to the CLI:
+
+```bash
+curl -fsSL https://github.com/route2048/codex-automation/releases/latest/download/install-skill.sh | sh
+python3 ~/.codex/skills/codex-automation-setup/scripts/update.py --workspace ~/workspace/codex-automation --target-id my-app --json
+```
+
+`codex-automation update --json` is the state update primitive: it applies DB
+migrations, checks paths, lists targets, refreshes a target pack when a target
+is selected, and performs a heartbeat dry-run. It never starts detached
+runners.
+
 ## Install And Uninstall Boundary
 
 Released users install the setup skill from GitHub Releases with

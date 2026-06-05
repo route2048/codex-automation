@@ -51,6 +51,9 @@ to bring a target repository under automation.
     `codex-automation uninstall --workspace <control-workspace> --json`.
 22. Remove generated runtime state only with explicit flags:
     `codex-automation uninstall --remove-app-state --remove-skills --remove-control-workspace --workspace <control-workspace> --yes --json`.
+23. To update an existing install, refresh the setup skill and run the updater:
+    `curl -fsSL https://github.com/route2048/codex-automation/releases/latest/download/install-skill.sh | sh`.
+    `python3 ~/.codex/skills/codex-automation-setup/scripts/update.py --workspace <control-workspace> --target-id <id> --json`.
 
 For a one-command bootstrap from a local path or Git URL:
 

@@ -104,6 +104,30 @@ codex-automation db doctor --json
 codex-automation target status my-app --json
 ```
 
+## Update
+
+Refresh the setup skill from GitHub Releases, then let the skill update the
+binary and validate local state:
+
+```bash
+curl -fsSL https://github.com/route2048/codex-automation/releases/latest/download/install-skill.sh | sh
+python3 ~/.codex/skills/codex-automation-setup/scripts/update.py \
+  --workspace ./codex-automation \
+  --target-id my-app \
+  --json
+```
+
+The updater replaces the release binary, runs `codex-automation update --json`,
+applies database migrations, checks registered targets, regenerates the target
+pack for the selected target, and runs a heartbeat dry-run without starting
+detached workers.
+
+For state-only validation with the installed binary:
+
+```bash
+codex-automation update --workspace ./codex-automation --target-id my-app --check --json
+```
+
 ## Uninstall
 
 Preview removal first:
@@ -223,10 +247,12 @@ ingest a worker's final JSON result.
   control workspaces
 - `paths --json` for inspecting control-workspace and app-state locations
 - agent-first `init` command
+- first-class `update` command for database migration, target validation,
+  target-pack refresh, and heartbeat dry-run
 
 Upcoming control-plane work should build on the SQLite boundary: richer
-workorder generation and app update flows should remain first-class CLI
-operations instead of target-local files.
+workorder generation should remain first-class CLI operations instead of
+target-local files.
 
 ## Setup Skill
 

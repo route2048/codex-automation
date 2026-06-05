@@ -10,7 +10,7 @@ runs release-readiness checks for this project itself.
 
 ## Implemented
 
-- `codex-automation-setup`: install, doctor, initialize a thin control
+- `codex-automation-setup`: install, update, doctor, initialize a thin control
   workspace, register target repos, and explain result submission.
 - `codex-automation-dev`: verify Rust tests, clean local install, optional
   Docker install, release-packaged setup skill installation, and fixture

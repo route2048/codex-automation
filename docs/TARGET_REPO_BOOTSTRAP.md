@@ -122,3 +122,22 @@ codex-automation uninstall \
 ```
 
 Target repositories are never removed by uninstall.
+
+## Update
+
+Refresh the setup skill, replace the binary, migrate the local database, and
+dry-run the control loop:
+
+```bash
+curl -fsSL https://github.com/route2048/codex-automation/releases/latest/download/install-skill.sh | sh
+python3 ~/.codex/skills/codex-automation-setup/scripts/update.py \
+  --workspace ~/workspace/codex-automation \
+  --target-id my-app \
+  --json
+```
+
+For validation without replacing the binary:
+
+```bash
+codex-automation update --workspace ~/workspace/codex-automation --target-id my-app --check --json
+```

@@ -84,12 +84,25 @@ registers the target, and prints handoff details.
 
 ## Update Flow
 
-For app updates, reinstall this skill from the latest GitHub Release when the
-setup workflow should be refreshed. Then run
-`python3 <this-skill>/scripts/install_binary.py --force --json`,
-`codex-automation doctor --json`, `codex-automation db doctor --json`, and
-`codex-automation target list --json`. Future schema migrations should be
-exposed as explicit `codex-automation db migrate` commands.
+For app updates, refresh this setup skill from the latest GitHub Release first:
+
+```bash
+curl -fsSL https://github.com/route2048/codex-automation/releases/latest/download/install-skill.sh | sh
+```
+
+Then run this skill's updater:
+
+```bash
+python3 <this-skill>/scripts/update.py --workspace <control-workspace> --target-id <id> --json
+```
+
+The updater downloads the latest release binary, runs `codex-automation update
+--json`, applies database migrations, checks app paths, lists registered
+targets, regenerates the target pack when `--target-id` is provided, and runs a
+heartbeat dry-run. It must not start detached runners during update.
+
+When testing an unpublished build, set `CODEX_AUTOMATION_BIN=<path-to-binary>`;
+the updater then skips binary replacement and validates state with that binary.
 
 ## Uninstall Flow
 

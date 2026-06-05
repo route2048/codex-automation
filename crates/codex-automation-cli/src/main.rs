@@ -30,15 +30,12 @@ struct Cli {
 enum Command {
     Init(InitArgs),
     Uninstall(UninstallArgs),
+    Update(UpdateArgs),
     Doctor,
     Paths(PathsArgs),
     Db {
         #[command(subcommand)]
         command: DbCommand,
-    },
-    App {
-        #[command(subcommand)]
-        command: AppCommand,
     },
     Workspace {
         #[command(subcommand)]
@@ -116,6 +113,16 @@ struct UninstallArgs {
 }
 
 #[derive(Debug, Args)]
+struct UpdateArgs {
+    #[arg(long)]
+    workspace: Option<PathBuf>,
+    #[arg(long)]
+    target_id: Option<String>,
+    #[arg(long)]
+    check: bool,
+}
+
+#[derive(Debug, Args)]
 struct PathsArgs {
     #[arg(long)]
     workspace: Option<PathBuf>,
@@ -125,17 +132,6 @@ struct PathsArgs {
 enum DbCommand {
     Doctor,
     Migrate,
-}
-
-#[derive(Debug, Subcommand)]
-enum AppCommand {
-    Update(AppUpdateArgs),
-}
-
-#[derive(Debug, Args)]
-struct AppUpdateArgs {
-    #[arg(long)]
-    check: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -397,6 +393,7 @@ fn run(command: Command) -> Result<Value> {
     match command {
         Command::Init(args) => run_init(args),
         Command::Uninstall(args) => run_uninstall(args),
+        Command::Update(args) => run_update(args),
         Command::Doctor => {
             let dirs = ensure_app_dirs()?;
             Ok(json!({"status": "ok", "app_state": dirs.as_json()}))
@@ -408,18 +405,6 @@ fn run(command: Command) -> Result<Value> {
         Command::Db { command } => match command {
             DbCommand::Doctor => storage::db_doctor(),
             DbCommand::Migrate => storage::db_migrate(),
-        },
-        Command::App { command } => match command {
-            AppCommand::Update(args) => {
-                if !args.check {
-                    anyhow::bail!("app update currently supports --check only");
-                }
-                Ok(json!({
-                    "status": "ok",
-                    "update_mode": "check_only",
-                    "message": "Upgrade or reinstall the codex-automation binary, then run codex-automation db migrate.",
-                }))
-            }
         },
         Command::Workspace { command } => match command {
             WorkspaceCommand::Init(args) => {
@@ -599,6 +584,65 @@ fn run(command: Command) -> Result<Value> {
             }
         },
     }
+}
+
+fn run_update(args: UpdateArgs) -> Result<Value> {
+    let workspace_path = args.workspace.as_deref();
+    let paths = paths_summary(workspace_path)?;
+    let database = if args.check {
+        storage::db_doctor()?
+    } else {
+        storage::db_migrate()?
+    };
+    let database_check = storage::db_doctor()?;
+    let workspace_status = if let Some(path) = workspace_path {
+        Some(workspace::workspace_status(path)?)
+    } else {
+        None
+    };
+    let targets = workspace::list_targets(workspace_path)?;
+    let target_status = if let Some(target_id) = args.target_id.as_deref() {
+        Some(workspace::target_status(target_id)?)
+    } else {
+        None
+    };
+    let target_pack = if !args.check {
+        if let Some(target_id) = args.target_id.as_deref() {
+            let conn = storage::connect()?;
+            Some(control::generate_target_pack(&conn, target_id)?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let heartbeat = if let Some(target_id) = args.target_id.as_deref() {
+        let mut conn = storage::connect()?;
+        Some(control::run_heartbeat(
+            &mut conn, target_id, true, false, 1,
+        )?)
+    } else {
+        None
+    };
+    let binary = std::env::current_exe()
+        .ok()
+        .map(|path| display_path(&path))
+        .unwrap_or_else(|| "unknown".to_owned());
+    Ok(json!({
+        "status": if args.check { "checked" } else { "updated" },
+        "mode": if args.check { "check" } else { "apply" },
+        "version": env!("CARGO_PKG_VERSION"),
+        "binary": binary,
+        "database": database,
+        "database_check": database_check,
+        "paths": paths,
+        "workspace": workspace_status,
+        "targets": targets,
+        "target": target_status,
+        "target_pack": target_pack,
+        "heartbeat": heartbeat,
+        "runner_execution": "not_started",
+    }))
 }
 
 fn run_uninstall(args: UninstallArgs) -> Result<Value> {

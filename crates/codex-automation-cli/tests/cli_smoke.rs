@@ -305,6 +305,45 @@ fn cli_registers_target_and_records_result() {
     assert_eq!(migrated["status"], "migrated");
     assert_eq!(migrated["schema_version"], 3);
 
+    let updated = run_json(
+        &[
+            "update",
+            "--workspace",
+            workspace.to_str().expect("workspace path"),
+            "--target-id",
+            "demo",
+        ],
+        &app_home,
+    );
+    assert_eq!(updated["status"], "updated");
+    assert_eq!(updated["mode"], "apply");
+    assert_eq!(updated["database"]["status"], "migrated");
+    assert_eq!(updated["database_check"]["schema_version"], 3);
+    assert_eq!(updated["workspace"]["status"], "ok");
+    assert_eq!(updated["targets"]["status"], "ok");
+    assert_eq!(updated["target"]["status"], "ok");
+    assert_eq!(updated["target_pack"]["status"], "generated");
+    assert_eq!(updated["heartbeat"]["status"], "ok");
+    assert_eq!(updated["heartbeat"]["dry_run"], true);
+    assert_eq!(updated["runner_execution"], "not_started");
+
+    let checked = run_json(
+        &[
+            "update",
+            "--workspace",
+            workspace.to_str().expect("workspace path"),
+            "--target-id",
+            "demo",
+            "--check",
+        ],
+        &app_home,
+    );
+    assert_eq!(checked["status"], "checked");
+    assert_eq!(checked["mode"], "check");
+    assert_eq!(checked["database"]["status"], "ok");
+    assert!(checked["target_pack"].is_null());
+    assert_eq!(checked["heartbeat"]["dry_run"], true);
+
     let workorder = run_json(
         &[
             "workorder",
