@@ -5,9 +5,11 @@ to bring a target repository under automation.
 
 ## Required Order
 
-1. Inspect this repository with `git status --short`.
-2. Verify the Rust CLI with `cargo test --workspace`.
-3. Install or expose the binary:
+1. If working from a source checkout, inspect this repository with
+   `git status --short` and verify the Rust CLI with `cargo test --workspace`.
+2. If installing as an end user, install the release binary:
+   `curl -fsSL https://raw.githubusercontent.com/route2048/codex-automation/main/scripts/install.sh | sh`.
+3. If developing from source, install or expose the binary:
    `cargo install --path crates/codex-automation-cli --locked`.
 4. Install the bundled setup skill:
    `codex-automation skill install codex-automation-setup --json`.
@@ -45,6 +47,10 @@ to bring a target repository under automation.
     produced a result artifact.
 20. Use `codex-automation prompt render <id> --workorder-id <workorder> --worker <worker-id> --json`
     to verify custom instructions before execution.
+21. To reset an installation, dry-run first:
+    `codex-automation uninstall --workspace <control-workspace> --json`.
+22. Remove generated runtime state only with explicit flags:
+    `codex-automation uninstall --remove-app-state --remove-skills --remove-control-workspace --workspace <control-workspace> --yes --json`.
 
 For a one-command bootstrap from a local path or Git URL:
 

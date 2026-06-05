@@ -1,0 +1,99 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: codex-automation-x86_64-unknown-linux-gnu.tar.gz
+            binary: codex-automation
+          - os: macos-14
+            target: aarch64-apple-darwin
+            archive: codex-automation-aarch64-apple-darwin.tar.gz
+            binary: codex-automation
+          - os: macos-13
+            target: x86_64-apple-darwin
+            archive: codex-automation-x86_64-apple-darwin.tar.gz
+            binary: codex-automation
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: codex-automation-x86_64-pc-windows-msvc.zip
+            binary: codex-automation.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --target "${{ matrix.target }}" --bin codex-automation
+
+      - name: Package Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "dist/${{ matrix.target }}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "dist/${{ matrix.target }}/codex-automation"
+          cp README.md LICENSE "dist/${{ matrix.target }}/"
+          tar -C "dist/${{ matrix.target }}" -czf "${{ matrix.archive }}" .
+
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "dist/${{ matrix.target }}" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" "dist/${{ matrix.target }}/codex-automation.exe"
+          Copy-Item README.md "dist/${{ matrix.target }}/README.md"
+          Copy-Item LICENSE "dist/${{ matrix.target }}/LICENSE"
+          Compress-Archive -Path "dist/${{ matrix.target }}/*" -DestinationPath "${{ matrix.archive }}" -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive }}
+          path: ${{ matrix.archive }}
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > SHA256SUMS
+          while IFS= read -r -d '' file; do
+            checksum="$(sha256sum "$file" | awk '{print $1}')"
+            printf '%s  %s\n' "$checksum" "$(basename "$file")" >> SHA256SUMS
+          done < <(find dist -type f \( -name '*.tar.gz' -o -name '*.zip' \) -print0 | sort -z)
+          cat SHA256SUMS
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/**/*.tar.gz
+            dist/**/*.zip
+            SHA256SUMS
+          generate_release_notes: true

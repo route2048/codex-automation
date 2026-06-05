@@ -37,6 +37,13 @@ The target repository is not modified by `workspace init` or `target add`.
 
 ## Commands
 
+Install the binary from GitHub Releases on macOS or Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/route2048/codex-automation/main/scripts/install.sh | sh
+codex-automation skill install codex-automation-setup --json
+```
+
 One-command setup:
 
 ```bash
@@ -91,3 +98,25 @@ artifacts:
 ```bash
 codex-automation result submit my-app --from-file result.json
 ```
+
+## Reset Or Uninstall
+
+Preview removal:
+
+```bash
+codex-automation uninstall --workspace ~/workspace/codex-automation --json
+```
+
+Remove generated automation state and the setup skill:
+
+```bash
+codex-automation uninstall \
+  --remove-app-state \
+  --remove-skills \
+  --remove-control-workspace \
+  --workspace ~/workspace/codex-automation \
+  --yes \
+  --json
+```
+
+Target repositories are never removed by uninstall.

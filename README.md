@@ -12,17 +12,30 @@ data directory. Target repositories stay clean during setup.
 
 ## Install
 
-Install the `codex-automation` binary, then let it write the bundled setup
-skill into Codex:
+Most users install a released binary. The source checkout is only needed for
+contributors and maintainers.
+
+Install on macOS or Linux from GitHub Releases:
 
 ```bash
-cargo install --path crates/codex-automation-cli --locked
+curl -fsSL https://raw.githubusercontent.com/route2048/codex-automation/main/scripts/install.sh | sh
+```
+
+Or download a release archive manually and place `codex-automation` on `PATH`.
+Then let the binary write the bundled setup skill into Codex:
+
+```bash
 codex-automation doctor --json
 codex-automation skill install codex-automation-setup --json
 ```
 
-Published builds can use the same commands after the binary is installed from a
-release artifact. During development, run it from the workspace:
+Developers can install from source:
+
+```bash
+cargo install --path crates/codex-automation-cli --locked
+```
+
+During development, run it from the workspace:
 
 ```bash
 cargo run --quiet -p codex-automation-cli --bin codex-automation -- doctor --json
@@ -91,6 +104,31 @@ codex-automation heartbeat run my-app --json
 codex-automation db doctor --json
 codex-automation target status my-app --json
 ```
+
+## Uninstall
+
+Preview removal first:
+
+```bash
+codex-automation uninstall --workspace ./codex-automation --json
+```
+
+Remove app-state, the setup skill, and a generated control workspace:
+
+```bash
+codex-automation uninstall \
+  --remove-app-state \
+  --remove-skills \
+  --remove-control-workspace \
+  --workspace ./codex-automation \
+  --yes \
+  --json
+```
+
+`uninstall` never deletes target repositories. It also does not remove the
+binary because binary removal depends on the installer or package manager. For
+`scripts/install.sh`, remove the installed file from `~/.local/bin` or the
+directory passed with `--install-dir`.
 
 ## Result Recording
 
@@ -182,6 +220,8 @@ ingest a worker's final JSON result.
   launch, refresh, list, and status
 - approval request/list/record
 - transactional result submission and listing
+- safe uninstall planning/removal for app-state, setup skill, and generated
+  control workspaces
 - `paths --json` for inspecting control-workspace and app-state locations
 - embedded setup skill installation
 - agent-first `init` command

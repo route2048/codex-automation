@@ -120,3 +120,25 @@ codex-automation result submit my-app --workorder-id demo --status fixed --summa
 The target repository is not modified during this bootstrap path. Runner
 packages are created under the OS app-state `artifacts/runners/` directory.
 Runner logs live under OS app-state `logs/runners/`.
+
+## Install And Uninstall Boundary
+
+Released users install the binary from GitHub Releases, `scripts/install.sh`,
+Homebrew, or another package manager. The binary can then install the embedded
+setup skill and initialize targets.
+
+`codex-automation uninstall` owns only codex-automation-created runtime files:
+
+```bash
+codex-automation uninstall --workspace ~/workspace/codex-automation --json
+codex-automation uninstall \
+  --remove-app-state \
+  --remove-skills \
+  --remove-control-workspace \
+  --workspace ~/workspace/codex-automation \
+  --yes \
+  --json
+```
+
+It never removes target repositories. It does not remove the binary because
+that belongs to the installer or package manager used to install it.

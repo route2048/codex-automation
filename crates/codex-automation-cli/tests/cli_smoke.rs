@@ -121,6 +121,52 @@ fn cli_installs_embedded_setup_skill_and_init_bootstraps_workspace() {
         .join("SKILL.md")
         .is_file());
     assert!(!target.join(".codex-automation").exists());
+
+    let uninstall_plan = run_json_with_env(
+        &[
+            "uninstall",
+            "--workspace",
+            workspace.to_str().expect("workspace path"),
+            "--codex-home",
+            init_codex_home_text,
+        ],
+        &app_home,
+        &[("CODEX_HOME", init_codex_home_text)],
+    );
+    assert_eq!(uninstall_plan["status"], "planned");
+    assert_eq!(uninstall_plan["dry_run"], true);
+    assert!(workspace.join("codex-automation.toml").is_file());
+    assert!(app_home.join("codex-automation.sqlite").is_file());
+    assert!(init_codex_home
+        .join("skills")
+        .join("codex-automation-setup")
+        .join("SKILL.md")
+        .is_file());
+
+    let uninstalled = run_json_with_env(
+        &[
+            "uninstall",
+            "--remove-app-state",
+            "--remove-skills",
+            "--remove-control-workspace",
+            "--workspace",
+            workspace.to_str().expect("workspace path"),
+            "--codex-home",
+            init_codex_home_text,
+            "--yes",
+        ],
+        &app_home,
+        &[("CODEX_HOME", init_codex_home_text)],
+    );
+    assert_eq!(uninstalled["status"], "ok");
+    assert_eq!(uninstalled["dry_run"], false);
+    assert!(!workspace.exists());
+    assert!(!app_home.exists());
+    assert!(!init_codex_home
+        .join("skills")
+        .join("codex-automation-setup")
+        .exists());
+    assert!(!target.join(".codex-automation").exists());
 }
 
 #[test]

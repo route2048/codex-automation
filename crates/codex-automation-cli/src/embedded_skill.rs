@@ -134,6 +134,38 @@ pub fn setup_skill_status(skill: &str, codex_home: Option<&Path>) -> Result<Valu
     setup_skill_status_at(&codex_home)
 }
 
+pub fn uninstall_setup_skill(
+    skill: &str,
+    codex_home: Option<&Path>,
+    dry_run: bool,
+) -> Result<Value> {
+    ensure_supported_skill(skill)?;
+    let codex_home = resolve_codex_home(codex_home)?;
+    let destination = skill_path(&codex_home);
+    let existed = destination.exists();
+    if !dry_run && existed {
+        let metadata = fs::symlink_metadata(&destination)
+            .with_context(|| format!("failed to inspect {}", display_path(&destination)))?;
+        if metadata.is_dir() {
+            fs::remove_dir_all(&destination)
+                .with_context(|| format!("failed to remove {}", display_path(&destination)))?;
+        } else {
+            fs::remove_file(&destination)
+                .with_context(|| format!("failed to remove {}", display_path(&destination)))?;
+        }
+    }
+    Ok(json!({
+        "status": if dry_run { "planned" } else { "ok" },
+        "skill": SETUP_SKILL_NAME,
+        "codex_home": display_path(&codex_home),
+        "path": display_path(&destination),
+        "existed": existed,
+        "removed": existed && !dry_run,
+        "dry_run": dry_run,
+        "restart_required": existed && !dry_run,
+    }))
+}
+
 fn setup_skill_status_at(codex_home: &Path) -> Result<Value> {
     let destination = skill_path(codex_home);
     let installed = destination.is_dir();

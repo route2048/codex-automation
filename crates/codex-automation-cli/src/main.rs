@@ -2,7 +2,7 @@ mod embedded_skill;
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
-use codex_automation_core::app_dirs::{ensure_app_dirs, paths_summary};
+use codex_automation_core::app_dirs::{app_dirs, display_path, ensure_app_dirs, paths_summary};
 use codex_automation_core::control;
 use codex_automation_core::storage;
 use codex_automation_core::workspace;
@@ -30,6 +30,7 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     Init(InitArgs),
+    Uninstall(UninstallArgs),
     Skill {
         #[command(subcommand)]
         command: SkillCommand,
@@ -103,6 +104,24 @@ struct InitArgs {
     skip_skill_install: bool,
     #[arg(long)]
     overwrite_skill: bool,
+}
+
+#[derive(Debug, Args)]
+struct UninstallArgs {
+    #[arg(long)]
+    remove_app_state: bool,
+    #[arg(long)]
+    remove_skills: bool,
+    #[arg(long)]
+    remove_control_workspace: bool,
+    #[arg(long)]
+    workspace: Option<PathBuf>,
+    #[arg(long)]
+    codex_home: Option<PathBuf>,
+    #[arg(long)]
+    yes: bool,
+    #[arg(long)]
+    dry_run: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -412,6 +431,7 @@ fn main() -> Result<()> {
 fn run(command: Command) -> Result<Value> {
     match command {
         Command::Init(args) => run_init(args),
+        Command::Uninstall(args) => run_uninstall(args),
         Command::Skill { command } => match command {
             SkillCommand::Install(args) => embedded_skill::install_setup_skill(
                 &args.skill,
@@ -625,6 +645,180 @@ fn run(command: Command) -> Result<Value> {
             }
         },
     }
+}
+
+fn run_uninstall(args: UninstallArgs) -> Result<Value> {
+    if args.yes && args.dry_run {
+        bail!("--yes and --dry-run cannot be used together");
+    }
+    let requested = args.remove_app_state || args.remove_skills || args.remove_control_workspace;
+    if args.yes && !requested {
+        bail!("refusing to uninstall without explicit removal flags");
+    }
+    if args.remove_control_workspace && args.workspace.is_none() {
+        bail!("--workspace is required with --remove-control-workspace");
+    }
+    let dry_run = !args.yes || args.dry_run;
+    let include_app_state = args.remove_app_state || !requested;
+    let include_skills = args.remove_skills || !requested;
+    let include_workspace =
+        args.remove_control_workspace || (!requested && args.workspace.is_some());
+    let mut actions = Vec::new();
+    if include_app_state {
+        let dirs = app_dirs()?;
+        actions.push(remove_app_state_action(&dirs.state_root, dry_run)?);
+    }
+    if include_skills {
+        actions.push(json!({
+            "label": "setup_skill",
+            "action": embedded_skill::uninstall_setup_skill(
+                embedded_skill::SETUP_SKILL_NAME,
+                args.codex_home.as_deref(),
+                dry_run,
+            )?,
+        }));
+    }
+    if include_workspace {
+        let workspace = args
+            .workspace
+            .as_ref()
+            .context("internal workspace path is missing")?;
+        actions.push(remove_path_action(
+            "control_workspace",
+            workspace,
+            dry_run,
+            Some("codex-automation.toml"),
+        )?);
+    }
+    Ok(json!({
+        "status": if dry_run { "planned" } else { "ok" },
+        "dry_run": dry_run,
+        "actions": actions,
+        "binary": {
+            "removed": false,
+            "reason": "binary removal depends on the installer or package manager; use brew uninstall, remove the install.sh destination, or cargo uninstall as appropriate"
+        },
+        "target_repositories": {
+            "removed": false,
+            "reason": "target repositories are never removed by codex-automation uninstall"
+        }
+    }))
+}
+
+fn remove_path_action(
+    label: &str,
+    path: &Path,
+    dry_run: bool,
+    required_marker: Option<&str>,
+) -> Result<Value> {
+    let path = expand_path(path)?;
+    reject_dangerous_delete_path(&path)?;
+    if path.exists() {
+        if let Some(marker) = required_marker {
+            let marker_path = path.join(marker);
+            if !marker_path.is_file() {
+                bail!(
+                    "refusing to remove {label}; marker is missing: {}",
+                    display_path(&marker_path)
+                );
+            }
+        }
+    }
+    let existed = path.exists();
+    let path_kind = path_kind(&path);
+    if !dry_run && existed {
+        remove_existing_path(&path)?;
+    }
+    Ok(json!({
+        "label": label,
+        "path": display_path(&path),
+        "kind": path_kind,
+        "existed": existed,
+        "removed": existed && !dry_run,
+        "dry_run": dry_run,
+    }))
+}
+
+fn remove_app_state_action(path: &Path, dry_run: bool) -> Result<Value> {
+    let path = expand_path(path)?;
+    reject_dangerous_delete_path(&path)?;
+    let existed = path.exists();
+    let marker_hits = app_state_marker_hits(&path);
+    let basename_matches =
+        path.file_name().and_then(|name| name.to_str()) == Some("codex-automation");
+    if !dry_run && existed && !basename_matches && marker_hits.is_empty() {
+        bail!(
+            "refusing to remove app_state; path does not look owned by codex-automation: {}",
+            display_path(&path)
+        );
+    }
+    let path_kind = path_kind(&path);
+    if !dry_run && existed {
+        remove_existing_path(&path)?;
+    }
+    Ok(json!({
+        "label": "app_state",
+        "path": display_path(&path),
+        "kind": path_kind,
+        "existed": existed,
+        "removed": existed && !dry_run,
+        "dry_run": dry_run,
+        "marker_hits": marker_hits,
+    }))
+}
+
+fn app_state_marker_hits(path: &Path) -> Vec<String> {
+    [
+        "codex-automation.sqlite",
+        "worktrees",
+        "logs",
+        "artifacts",
+        "backups",
+    ]
+    .iter()
+    .filter(|marker| path.join(marker).exists())
+    .map(|marker| (*marker).to_owned())
+    .collect()
+}
+
+fn path_kind(path: &Path) -> &'static str {
+    if path.is_dir() {
+        "directory"
+    } else if path.is_file() {
+        "file"
+    } else {
+        "missing"
+    }
+}
+
+fn remove_existing_path(path: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect {}", display_path(path)))?;
+    if metadata.is_dir() {
+        fs::remove_dir_all(path)
+            .with_context(|| format!("failed to remove {}", display_path(path)))?;
+    } else {
+        fs::remove_file(path)
+            .with_context(|| format!("failed to remove {}", display_path(path)))?;
+    }
+    Ok(())
+}
+
+fn reject_dangerous_delete_path(path: &Path) -> Result<()> {
+    if path.parent().is_none() {
+        bail!("refusing to remove filesystem root: {}", display_path(path));
+    }
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        if path == home {
+            bail!("refusing to remove HOME: {}", display_path(path));
+        }
+    }
+    if let Some(profile) = std::env::var_os("USERPROFILE").map(PathBuf::from) {
+        if path == profile {
+            bail!("refusing to remove USERPROFILE: {}", display_path(path));
+        }
+    }
+    Ok(())
 }
 
 fn run_init(args: InitArgs) -> Result<Value> {

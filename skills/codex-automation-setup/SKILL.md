@@ -54,6 +54,10 @@ repository to `codex-automation`.
     `codex-automation paths --workspace <control-workspace> --json`.
 18. Open the thin control workspace in Codex App and continue from `README.md`,
     `AGENTS.md`, `workers/control-plane.toml`, and `targets/<id>.toml`.
+19. To reset a local setup, preview with:
+    `codex-automation uninstall --workspace <control-workspace> --json`.
+20. Remove generated state only with explicit flags:
+    `codex-automation uninstall --remove-app-state --remove-skills --remove-control-workspace --workspace <control-workspace> --yes --json`.
 
 ## Boundaries
 
@@ -90,3 +94,11 @@ the setup workflow should be refreshed, then run `codex-automation doctor --json
 `codex-automation db doctor --json`, and `codex-automation target list --json`.
 Future schema migrations should be exposed as explicit `codex-automation db
 migrate` commands.
+
+## Uninstall Flow
+
+`codex-automation uninstall` removes only codex-automation-owned local state.
+It can remove app-state, the generated setup skill, and a generated control
+workspace when explicitly requested with `--yes`. It must never delete target
+repositories. The installed binary is owned by the installer or package manager
+and is not removed by this command.
