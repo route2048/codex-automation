@@ -10,4 +10,5 @@ This directory is the human-facing codex-automation control workspace.
 - Use `codex-automation heartbeat run <target-id> --json` for one bounded control-plane step.
 - Use `codex-automation prompt render <target-id> --workorder-id <id> --worker <worker-id> --json` to preview the merged prompt.
 - Use `codex-automation result submit` to record worker results.
+- Worker execution belongs in the runner package `working_directory` shared worktree, not the canonical target repo.
 - Do not edit app-managed SQLite, worktrees, logs, or runner state by hand.

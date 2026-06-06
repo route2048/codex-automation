@@ -53,7 +53,7 @@ The app state root contains:
 
 ```text
 codex-automation.sqlite
-worktrees/
+worktrees/                    # shared worker Git worktrees
 logs/
 artifacts/
 backups/
@@ -117,8 +117,10 @@ codex-automation result submit my-app --workorder-id demo --status fixed --summa
 ```
 
 The target repository is not modified during this bootstrap path. Runner
-packages are created under the OS app-state `artifacts/runners/` directory.
-Runner logs live under OS app-state `logs/runners/`.
+dispatch creates a shared detached Git worktree under OS app-state
+`worktrees/<target-id>/` and points Codex workers there. Runner packages are
+created under the OS app-state `artifacts/runners/` directory. Runner logs live
+under OS app-state `logs/runners/`.
 
 ## Update
 

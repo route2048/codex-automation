@@ -1,6 +1,7 @@
 use assert_cmd::Command;
 use serde_json::Value;
 use std::path::Path;
+use std::process::Command as StdCommand;
 use tempfile::TempDir;
 
 fn run_json(args: &[&str], app_home: &Path) -> Value {
@@ -34,6 +35,30 @@ fn run_failure(args: &[&str], app_home: &Path) -> String {
     String::from_utf8(output).expect("stderr should be utf8")
 }
 
+fn git(path: &Path, args: &[&str]) {
+    let output = StdCommand::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(args)
+        .output()
+        .expect("git should run");
+    assert!(
+        output.status.success(),
+        "git {:?} failed: {}{}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn init_git_repo(path: &Path) {
+    git(path, &["init"]);
+    git(path, &["config", "user.email", "codex@example.test"]);
+    git(path, &["config", "user.name", "Codex Test"]);
+    git(path, &["add", "."]);
+    git(path, &["commit", "-m", "initial"]);
+}
+
 #[test]
 fn cli_prints_version() {
     let mut command = Command::cargo_bin("codex-automation").expect("binary should build");
@@ -57,6 +82,7 @@ fn cli_init_bootstraps_workspace_without_embedded_skill() {
     let target = temp.path().join("target-repo");
     std::fs::create_dir(&target).expect("target repo dir");
     std::fs::write(target.join("README.md"), "demo").expect("readme");
+    init_git_repo(&target);
 
     let plan = run_json(
         &[
@@ -222,6 +248,7 @@ fn cli_registers_target_and_records_result() {
     std::fs::write(target.join("out").join("bundle.js"), "generated").expect("generated");
     std::fs::write(target.join(".runtime").join("token.json"), "{}").expect("token");
     std::fs::write(target.join(".pytest_cache").join("README.md"), "cache").expect("cache");
+    init_git_repo(&target);
 
     let db = run_json(&["db", "doctor"], &app_home);
     assert_eq!(db["status"], "ok");
@@ -321,7 +348,7 @@ fn cli_registers_target_and_records_result() {
     assert!(worker["custom_instructions"]
         .as_str()
         .expect("custom instructions")
-        .contains("Read the target repository first"));
+        .contains("Read the shared worktree first"));
 
     let workers = run_json(&["worker", "list", "demo"], &app_home);
     assert_eq!(workers["workers"][0]["id"], "repo-maintainer");
@@ -458,7 +485,17 @@ fn cli_registers_target_and_records_result() {
     assert!(prompt.contains("Custom Instructions"));
     assert!(prompt.contains("Keep orchestration simple"));
     assert!(prompt.contains("Follow the target repository AGENTS.md files"));
-    assert!(prompt.contains("Read the target repository first"));
+    assert!(prompt.contains("Read the shared worktree first"));
+    assert!(prompt.contains("Working directory"));
+    assert_eq!(runner["command"]["worktree"]["mode"], "shared_per_target");
+    assert_eq!(
+        runner["command"]["working_directory"],
+        runner["command"]["worktree"]["path"]
+    );
+    let working_directory = runner["command"]["working_directory"]
+        .as_str()
+        .expect("working directory");
+    assert!(Path::new(working_directory).join(".git").exists());
     assert!(prompt.contains("codex-automation result submit demo --workorder-id wo-2"));
     let rendered = run_json(
         &[
@@ -476,7 +513,7 @@ fn cli_registers_target_and_records_result() {
     assert!(rendered["prompt"]
         .as_str()
         .expect("rendered prompt")
-        .contains("Read the target repository first"));
+        .contains("Read the shared worktree first"));
     let command_path = runner["command"]["package"]["command_path"]
         .as_str()
         .expect("command path");
@@ -567,6 +604,7 @@ fn cli_heartbeat_generates_pack_and_dispatches_ready_work() {
     let target = temp.path().join("target-repo");
     std::fs::create_dir(&target).expect("target repo dir");
     std::fs::write(target.join("Cargo.toml"), "[package]\nname = \"demo\"\n").expect("marker");
+    init_git_repo(&target);
 
     run_json(
         &[
@@ -614,6 +652,10 @@ fn cli_heartbeat_generates_pack_and_dispatches_ready_work() {
         heartbeat["dispatched"][0]["command"]["worker"]["id"],
         "repo-maintainer"
     );
+    let heartbeat_working_directory = heartbeat["dispatched"][0]["command"]["working_directory"]
+        .as_str()
+        .expect("heartbeat working directory");
+    assert!(Path::new(heartbeat_working_directory).join(".git").exists());
     assert!(std::fs::read_to_string(
         heartbeat["target_pack"]["pack_path"]
             .as_str()
@@ -639,6 +681,8 @@ fn cli_can_ingest_handoff_result_file() {
     let workspace = temp.path().join("codex-automation");
     let target = temp.path().join("target-repo");
     std::fs::create_dir(&target).expect("target repo dir");
+    std::fs::write(target.join("README.md"), "demo").expect("readme");
+    init_git_repo(&target);
 
     run_json(
         &[

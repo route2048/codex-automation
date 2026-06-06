@@ -12,7 +12,9 @@ repository to `codex-automation`.
 
 ## Workflow
 
-1. Confirm the target repository path or Git URL from the user request.
+1. Confirm the target repository path or Git URL from the user request. Local
+   target paths must be Git checkouts with at least one commit before worker
+   handoff can create the shared worktree.
 2. Resolve the binary command. First run:
    `command -v codex-automation || true`.
    If the binary is missing, run this skill's installer:
@@ -66,13 +68,16 @@ repository to `codex-automation`.
    `codex-automation heartbeat run <id> --json`.
    `init` also runs this first heartbeat. It may report `dry_run: false`, but
    setup must not launch Codex processes; the expected effect is a Codex App
-   handoff package for a worker thread.
+   handoff package for a worker thread and a shared Git worktree under OS app
+   data. The worker should open the runner package `working_directory`, not the
+   canonical target repository path.
    The setup output and runner package include the resolved `binary_path`; use
    that absolute path when `codex-automation` is not on `PATH`.
    Inspect `target_git.before`, `target_git.after`, and
    `target_git.unchanged` in the setup JSON before concluding setup touched the
    target repo. Dirty target state should be treated as pre-existing context
-   when `unchanged: true`.
+   when `unchanged: true`; uncommitted target changes are not copied into the
+   shared worktree.
 7. Inspect the registered target:
    `codex-automation target status <id> --json`.
 8. Record worker results with:
@@ -84,8 +89,8 @@ repository to `codex-automation`.
     `codex-automation runner refresh <id> --json`.
 11. Re-inspect paths after setup:
     `codex-automation paths --workspace <control-workspace> --json`.
-12. Open the thin control workspace in Codex App and continue from `README.md`,
-    `AGENTS.md`, `workers/control-plane.toml`, and `targets/<id>.toml`.
+12. Open the thin control workspace in Codex App for orchestration. Open the
+    runner package `working_directory` path for worker execution.
 13. To reset a local setup, preview with:
     `codex-automation uninstall --workspace <control-workspace> --json`.
 14. Remove generated state only with explicit flags:

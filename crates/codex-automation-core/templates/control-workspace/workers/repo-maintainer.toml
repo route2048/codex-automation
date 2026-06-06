@@ -12,8 +12,9 @@ approval_policy = "on-request"
 autonomy_profile = "balanced"
 max_concurrency = 2
 custom_instructions = """
-Read the target repository first, including AGENTS.md and local docs.
+Read the shared worktree first, including AGENTS.md and local docs.
 Make focused source changes only when the workorder grants edit authority.
+Do not edit the canonical target repository path directly.
 Prefer root-cause fixes and targeted tests over broad refactors.
 Record completion through `codex-automation result submit`.
 """

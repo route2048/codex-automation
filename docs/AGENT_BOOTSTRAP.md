@@ -51,15 +51,16 @@ to bring a target repository under automation.
 14. Start the first bounded control-plane heartbeat with:
     `codex-automation heartbeat run <id> --json`.
     `init` also runs this first heartbeat. It creates a Codex App handoff
-    package; it must not launch detached or headless Codex processes.
+    package and a shared Git worktree under OS app data; it must not launch
+    detached or headless Codex processes.
     Check `target_git.before`, `target_git.after`, and `target_git.unchanged`
     in setup output before claiming whether setup changed the target checkout.
 15. Inspect target registration:
    `codex-automation target status <id> --json`.
 16. Inspect runner packages with:
     `codex-automation runner list <id> --json`.
-17. Open the control workspace in Codex App. Continue from `README.md`,
-   `AGENTS.md`, `workers/control-plane.toml`, and `targets/<id>.toml`.
+17. Open the control workspace in Codex App for orchestration. Open the runner
+   package `working_directory` path for worker execution.
 18. Record worker results through:
    `codex-automation result submit <id> ... --json`.
    If the command is not on `PATH`, use the `binary_path` printed by `init` or

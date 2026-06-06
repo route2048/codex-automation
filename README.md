@@ -63,8 +63,8 @@ wants Codex App to open:
 
 ```text
 codex-automation/              # thin Codex App control workspace
-target-repo/                   # product or OSS repository being automated
-OS app data/codex-automation/  # SQLite, worktrees, logs, artifacts
+target-repo/                   # canonical product or OSS repository
+OS app data/codex-automation/  # SQLite, shared worktrees, logs, artifacts
 ```
 
 Maintainers may also have a separate `codex-automation-src/` source checkout,
@@ -250,8 +250,10 @@ codex-automation approval request my-app --workorder-id inspect-1 --reason "Need
 codex-automation approval record my-app approval-inspect-1 --decision approved --message "Approved" --json
 ```
 
-Runner dispatch creates a handoff package for Codex App. `codex-automation`
-does not launch headless Codex processes. Workers can record results through
+Runner dispatch creates a shared target worktree and a handoff package for
+Codex App. `codex-automation` does not launch headless Codex processes. Workers
+open the shared worktree as their working directory and do not edit the
+canonical target repository directly. Workers can record results through
 `codex-automation result submit`, or a controller can save the worker's final
 JSON object to the package `result.json` and run
 `codex-automation runner refresh`.
@@ -272,6 +274,7 @@ and untracked counts when the target is a Git checkout.
   loop runs, runner packages, and approvals
 - thin Codex App control workspace generation
 - target registration without modifying the target repo
+- shared-per-target Git worktree materialization for worker handoffs
 - workspace-local worker TOML definitions
 - worker add/list/status
 - workorder creation/list/status

@@ -13,6 +13,7 @@ codex-automation target list --json
 codex-automation worker list <target-id> --json
 codex-automation target pack <target-id> --json
 codex-automation heartbeat run <target-id> --json
+codex-automation runner list <target-id> --json
 codex-automation prompt render <target-id> --workorder-id <workorder-id> --worker repo-maintainer --json
 codex-automation result list <target-id> --json
 ```
@@ -24,3 +25,7 @@ If `codex-automation` is not on `PATH`, use the `binary_path` printed by
 Customize the automation by editing `workers/control-plane.toml`,
 `workers/*.toml`, and `targets/*.toml`. Reload changed runnable workers with
 `codex-automation worker add <target-id> --from-file workers/<worker>.toml`.
+
+Runner handoffs include a `working_directory` field. Open that shared worktree
+for worker execution; do not edit the canonical target repository path
+directly.

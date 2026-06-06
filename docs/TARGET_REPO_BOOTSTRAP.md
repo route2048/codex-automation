@@ -22,6 +22,7 @@ target repo.
 OS app data/codex-automation/
 ├── codex-automation.sqlite
 ├── worktrees/
+│   └── my-app/                    # shared worker worktree
 ├── logs/
 ├── artifacts/
 └── backups/
@@ -34,6 +35,11 @@ and can put the control workspace anywhere, for example
 `~/project01/codex-automation`.
 
 The target repository is not modified by `workspace init` or `target add`.
+Runner dispatch materializes a shared Git worktree under OS app data and hands
+that worktree to Codex workers as their working directory. The canonical target
+repository remains the integration source and should not be edited directly by
+workers. Dispatch requires the target to be a Git checkout with at least one
+commit.
 
 ## Commands
 
@@ -77,7 +83,8 @@ codex-automation init ~/workspace/target-repo --workspace ~/workspace/codex-auto
 Use one-command setup only for a new target registration. If `target list
 --json` already shows the target, use the update flow instead. `init` creates
 the first workorder and Codex App handoff package, but it does not launch
-detached or headless Codex processes.
+detached or headless Codex processes. The handoff points Codex App at the
+shared worktree, not the canonical target repository.
 The handoff includes the resolved binary path for agents whose shell does not
 have `codex-automation` on `PATH`.
 
@@ -98,7 +105,9 @@ codex-automation heartbeat run my-app --json
 
 Target packs include Git branch/head/dirty counts when the target is a Git
 checkout. Treat dirty state as a context signal; setup still must not edit the
-target repo.
+target repo. The shared worktree is created from the committed target `HEAD`;
+uncommitted target changes are reported as context but are not copied into the
+worktree.
 
 Customize `workers/control-plane.toml`, runnable `workers/*.toml`, and
 `targets/my-app.toml` before execution when the target needs local policy.

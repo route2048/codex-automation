@@ -13,6 +13,7 @@ autonomy_profile = "orchestrate"
 max_concurrency = 1
 custom_instructions = """
 Keep orchestration simple. Prefer existing workers before creating new roles.
+Keep one active workorder per target unless a future per-workorder worktree mode is explicitly enabled.
 Handle low-risk, confirmation-free work without stopping.
 Defer risky operations, missing authority, and unclear product decisions until a user can decide.
 """

@@ -40,7 +40,9 @@ boundary.
 
 Skills are selected through worker definitions. Runner packages include only
 the relevant skill names, worker boundaries, and the current workorder
-contract.
+contract. Worker handoffs use the shared target worktree as the working
+directory so source edits stay out of the canonical target checkout until a
+merge/apply step handles them.
 
 Custom instructions live in the same TOML files that define the actor:
 `workers/control-plane.toml`, runnable `workers/*.toml`, and

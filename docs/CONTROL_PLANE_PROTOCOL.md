@@ -13,6 +13,24 @@ The control plane is coordinated by the CLI and SQLite database.
 Do not place queue state, worker registries, runner logs, or worktrees in the
 target repo during normal operation.
 
+## Worktree
+
+The default worktree mode is `shared_per_target`.
+
+```text
+OS app data/codex-automation/worktrees/<target-id>/
+```
+
+Runner dispatch creates this detached Git worktree from the target repository
+`HEAD` when it is missing. Workers read and edit this shared worktree. They do
+not edit the canonical target repository path directly.
+
+The control plane keeps the initial concurrency model simple: one active
+workorder per target. While a workorder is `ready_for_worker`, `handoff_ready`,
+or `needs_user`, the loop does not mark another queued workorder ready, and
+runner dispatch refuses a different active workorder. Per-workorder worktrees
+can be added later as an explicit parallel mode.
+
 ## Workspace
 
 Create the control workspace with:
@@ -34,8 +52,9 @@ codex-automation target pack <id> --json
 ```
 
 The CLI writes `targets/<id>.toml` for humans and records the target row in
-SQLite. `target pack` scans the repository and writes generated context under
-OS app data `artifacts/targets/<id>/`. The target repo is not modified.
+SQLite. `target pack` scans the canonical repository and writes generated
+context under OS app data `artifacts/targets/<id>/`. The target repo is not
+modified.
 
 ## Result
 
@@ -148,9 +167,10 @@ codex-automation workorder status <target-id> <workorder-id> --json
 codex-automation loop run <target-id> --json
 ```
 
-If a queued workorder exists, it is marked `ready_for_worker`. If the target is
-idle, the loop creates a read-only `repo_discovery` workorder. Detached worker
-execution is not started by this command.
+If the target has no active workorder and a queued workorder exists, the queued
+workorder is marked `ready_for_worker`. If the target is idle, the loop creates
+a read-only `repo_discovery` workorder. Detached worker execution is not
+started by this command.
 
 ## Heartbeat
 
@@ -161,8 +181,9 @@ codex-automation heartbeat run <target-id> --json
 ```
 
 The heartbeat refreshes runner state, regenerates the target pack, advances one
-loop step, selects a compatible worker for ready work, and creates a runner
-handoff package. It does not launch Codex processes.
+loop step, selects a compatible worker for ready work, materializes the shared
+worktree, and creates one runner handoff package. It does not launch Codex
+processes.
 
 ## Runner
 
@@ -175,11 +196,13 @@ codex-automation runner list <target-id> --json
 codex-automation runner status <target-id> <runner-id> --json
 ```
 
-The package is stored under OS app data `artifacts/runners/` and contains:
+Dispatch materializes the shared worktree before writing runner state. The
+package is stored under OS app data `artifacts/runners/` and contains:
 
-- `prompt.md`: the worker prompt, boundaries, workorder payload, and result
-  contract
-- `handoff.md`: the short operator handoff for Codex App
+- `prompt.md`: the worker prompt, working directory, boundaries, workorder
+  payload, and result contract
+- `handoff.md`: the short operator handoff for Codex App, including the shared
+  worktree path
 - `result.json`: optional file where a worker or controller can save the final
   result JSON for ingestion
 - `command.json`: the machine-readable runner metadata stored in SQLite

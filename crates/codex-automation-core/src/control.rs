@@ -200,11 +200,33 @@ fn workorder_target_pack_path(workorder: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn repository_state_block(workorder: &Value) -> String {
+fn repository_state_block(target: &Value, workorder: &Value) -> Result<String> {
+    let repo_path = value_string(target, "/repo_path", "target repo path")?;
+    let worktree_path = value_string(target, "/worktree_path", "target worktree path")?;
+    let worktree = PathBuf::from(&worktree_path);
+    let mut lines = vec![
+        format!("Canonical repository: {repo_path}"),
+        format!("Shared working directory: {worktree_path}"),
+    ];
+    if worktree.exists() {
+        lines.push("Shared worktree Git state:".to_owned());
+        lines.push("```json".to_owned());
+        lines.push(
+            serde_json::to_string_pretty(&inspect_git_state(&worktree))
+                .unwrap_or_else(|_| "{}".to_owned()),
+        );
+        lines.push("```".to_owned());
+    } else {
+        lines.push(
+            "Shared worktree: not materialized yet; runner dispatch should create it before handoff."
+                .to_owned(),
+        );
+    }
     let Some(pack_path) = workorder_target_pack_path(workorder) else {
-        return "Target pack: not recorded on this workorder.\n".to_owned();
+        lines.push("Target pack: not recorded on this workorder.".to_owned());
+        return Ok(lines.join("\n"));
     };
-    let mut lines = vec![format!("Target pack: {pack_path}")];
+    lines.push(format!("Target pack: {pack_path}"));
     let pack = fs::read_to_string(&pack_path)
         .ok()
         .and_then(|text| serde_json::from_str::<Value>(&text).ok());
@@ -219,7 +241,7 @@ fn repository_state_block(workorder: &Value) -> String {
                 .to_owned(),
         );
     }
-    lines.join("\n")
+    Ok(lines.join("\n"))
 }
 
 fn ensure_worker_matches_workorder(
@@ -271,6 +293,41 @@ fn target_payload(conn: &Connection, target_id: &str) -> Result<Value> {
     )
     .optional()?
     .with_context(|| format!("target is not registered: {target_id}"))
+}
+
+fn active_workorder(
+    conn: &Connection,
+    target_id: &str,
+    exclude_workorder_id: Option<&str>,
+) -> Result<Option<Value>> {
+    let mut statement = conn.prepare(
+        "SELECT id, kind, title, status FROM workorders
+         WHERE target_id = ?1
+           AND status IN ('ready_for_worker', 'handoff_ready', 'needs_user')
+         ORDER BY created_at, id",
+    )?;
+    let rows = statement.query_map(params![target_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    })?;
+    for row in rows {
+        let (workorder_id, kind, title, status) = row?;
+        if exclude_workorder_id == Some(workorder_id.as_str()) {
+            continue;
+        }
+        return Ok(Some(json!({
+            "target_id": target_id,
+            "workorder_id": workorder_id,
+            "workorder_status": status,
+            "kind": kind,
+            "title": title,
+        })));
+    }
+    Ok(None)
 }
 
 fn first_ready_workorder(conn: &Connection, target_id: &str) -> Result<Option<Value>> {
@@ -343,6 +400,10 @@ fn render_runner_prompt(
         .get("repo_path")
         .and_then(Value::as_str)
         .context("target.repo_path is missing")?;
+    let working_directory = target
+        .get("worktree_path")
+        .and_then(Value::as_str)
+        .context("target.worktree_path is missing")?;
     let workorder_kind = workorder
         .get("kind")
         .and_then(Value::as_str)
@@ -381,7 +442,7 @@ fn render_runner_prompt(
         &custom_instructions.worker,
     );
     let result_command = result_submit_prefix(target_id, workorder_id);
-    let repository_state = repository_state_block(workorder);
+    let repository_state = repository_state_block(target, workorder)?;
     let result_examples = if sandbox == "read-only" || workorder_kind.contains("discovery") {
         format!(
             r#"{result_command} --status discovery_no_findings --summary "..." --next-action no_action --json
@@ -406,7 +467,8 @@ You are acting as a Codex automation worker from a Codex App handoff.
 ## Assignment
 
 - Target: {target_id}
-- Repository path: {repo_path}
+- Canonical repository path: {repo_path}
+- Working directory: {working_directory}
 - Workorder: {workorder_id}
 - Workorder kind: {workorder_kind}
 - Workorder title: {workorder_title}
@@ -419,6 +481,7 @@ You are acting as a Codex automation worker from a Codex App handoff.
 ## Operating Boundaries
 
 - Obey the target repository instructions, including AGENTS.md files.
+- Open and work inside the Working directory. Do not edit the canonical repository path directly.
 - Do not specify model or model_reasoning_effort in Codex calls.
 - Do not push, deploy, delete data, or start long-running services unless the workorder explicitly grants that authority.
 - Respect the worker sandbox, approval policy, autonomy profile, and instructions below.
@@ -664,6 +727,10 @@ fn run_git(root: &Path, args: &[&str]) -> std::result::Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
+fn git_required(root: &Path, args: &[&str], context: &str) -> Result<String> {
+    run_git(root, args).map_err(|error| anyhow::anyhow!("{context}: {error}"))
+}
+
 pub fn inspect_git_state(root: &Path) -> Value {
     let head = match run_git(root, &["rev-parse", "HEAD"]) {
         Ok(value) => value,
@@ -713,6 +780,130 @@ pub fn inspect_git_state(root: &Path) -> Value {
         "unstaged_count": unstaged,
         "untracked_count": untracked,
     })
+}
+
+fn directory_is_empty(path: &Path) -> Result<bool> {
+    Ok(fs::read_dir(path)
+        .with_context(|| format!("failed to read {}", display_path(path)))?
+        .next()
+        .is_none())
+}
+
+fn is_git_checkout(path: &Path) -> bool {
+    run_git(path, &["rev-parse", "--is-inside-work-tree"])
+        .map(|value| value == "true")
+        .unwrap_or(false)
+}
+
+fn add_detached_worktree(repo_path: &Path, worktree_path: &Path) -> Result<()> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_path)
+        .args(["worktree", "add", "--detach"])
+        .arg(worktree_path)
+        .arg("HEAD")
+        .output()
+        .with_context(|| {
+            format!(
+                "failed to run git worktree add for {}",
+                display_path(worktree_path)
+            )
+        })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        let message = if stderr.is_empty() { stdout } else { stderr };
+        bail!(
+            "failed to create shared worktree {} from {}: {}",
+            display_path(worktree_path),
+            display_path(repo_path),
+            message
+        );
+    }
+    Ok(())
+}
+
+fn ensure_shared_worktree(conn: &Connection, target_id: &str, target: &Value) -> Result<Value> {
+    let repo_path = PathBuf::from(value_string(target, "/repo_path", "target repo path")?);
+    let worktree_path = PathBuf::from(value_string(
+        target,
+        "/worktree_path",
+        "target worktree path",
+    )?);
+    let repo_head = git_required(
+        &repo_path,
+        &["rev-parse", "HEAD"],
+        "target repository must be a Git checkout with at least one commit",
+    )?;
+    let repo_branch = run_git(&repo_path, &["branch", "--show-current"]).unwrap_or_default();
+
+    if worktree_path.exists() {
+        if worktree_path.is_dir() && directory_is_empty(&worktree_path)? {
+            fs::remove_dir(&worktree_path).with_context(|| {
+                format!("failed to remove empty {}", display_path(&worktree_path))
+            })?;
+        } else if !is_git_checkout(&worktree_path) {
+            bail!(
+                "refusing to use non-git shared worktree path: {}",
+                display_path(&worktree_path)
+            );
+        } else {
+            let mut git = inspect_git_state(&worktree_path);
+            let dirty = git.get("dirty").and_then(Value::as_bool).unwrap_or(true);
+            let current_head = git.get("head").and_then(Value::as_str);
+            let mut status = "existing";
+            if !dirty && current_head != Some(repo_head.as_str()) {
+                git_required(
+                    &worktree_path,
+                    &["checkout", "--detach", &repo_head],
+                    "failed to update clean shared worktree to target HEAD",
+                )?;
+                git = inspect_git_state(&worktree_path);
+                status = "updated";
+            }
+            let payload = json!({
+                "status": status,
+                "mode": "shared_per_target",
+                "path": display_path(&worktree_path),
+                "canonical_repo_path": display_path(&repo_path),
+                "base_head": repo_head,
+                "base_branch": repo_branch,
+                "git": git,
+            });
+            write_event(
+                conn,
+                "shared_worktree_ready",
+                Some(target_id),
+                None,
+                &payload,
+            )?;
+            return Ok(payload);
+        }
+    }
+
+    if let Some(parent) = worktree_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", display_path(parent)))?;
+    }
+    let _ = run_git(&repo_path, &["worktree", "prune"]);
+    add_detached_worktree(&repo_path, &worktree_path)?;
+    let payload = json!({
+        "status": "created",
+        "mode": "shared_per_target",
+        "path": display_path(&worktree_path),
+        "canonical_repo_path": display_path(&repo_path),
+        "base_head": repo_head,
+        "base_branch": repo_branch,
+        "git": inspect_git_state(&worktree_path),
+    });
+    write_event(
+        conn,
+        "shared_worktree_ready",
+        Some(target_id),
+        None,
+        &payload,
+    )?;
+    Ok(payload)
 }
 
 pub fn generate_target_pack(conn: &Connection, target_id: &str) -> Result<Value> {
@@ -811,6 +1002,16 @@ fn result_count_for_workorder(
         |row| row.get(0),
     )
     .context("failed to count workorder results")
+}
+
+fn workorder_status(conn: &Connection, target_id: &str, workorder_id: &str) -> Result<String> {
+    conn.query_row(
+        "SELECT status FROM workorders WHERE target_id = ?1 AND id = ?2",
+        params![target_id, workorder_id],
+        |row| row.get(0),
+    )
+    .optional()?
+    .with_context(|| format!("workorder is not registered: {workorder_id}"))
 }
 
 pub fn add_worker(conn: &Connection, target_id: &str, payload: Value) -> Result<Value> {
@@ -1091,6 +1292,16 @@ pub fn get_workorder(conn: &Connection, target_id: &str, workorder_id: &str) -> 
 
 pub fn run_loop_once(conn: &Connection, target_id: &str, dry_run: bool) -> Result<Value> {
     ensure_target_exists(conn, target_id)?;
+    if let Some(active) = active_workorder(conn, target_id, None)? {
+        return Ok(json!({
+            "status": "active_workorder_exists",
+            "target_id": target_id,
+            "workorder_id": active.get("workorder_id").and_then(Value::as_str),
+            "workorder_status": active.get("workorder_status").and_then(Value::as_str),
+            "kind": active.get("kind").and_then(Value::as_str),
+            "title": active.get("title").and_then(Value::as_str),
+        }));
+    }
     let queued: Option<(String, String, String)> = conn
         .query_row(
             "SELECT id, kind, title FROM workorders
@@ -1138,26 +1349,6 @@ pub fn run_loop_once(conn: &Connection, target_id: &str, dry_run: bool) -> Resul
             "status": "ready_for_worker",
             "target_id": target_id,
             "workorder_id": workorder_id,
-            "kind": kind,
-            "title": title,
-        }));
-    }
-    let active: Option<(String, String, String, String)> = conn
-        .query_row(
-            "SELECT id, kind, title, status FROM workorders
-             WHERE target_id = ?1
-               AND status IN ('ready_for_worker', 'handoff_ready', 'needs_user')
-             ORDER BY created_at, id LIMIT 1",
-            params![target_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        )
-        .optional()?;
-    if let Some((workorder_id, kind, title, status)) = active {
-        return Ok(json!({
-            "status": "active_workorder_exists",
-            "target_id": target_id,
-            "workorder_id": workorder_id,
-            "workorder_status": status,
             "kind": kind,
             "title": title,
         }));
@@ -1232,7 +1423,7 @@ pub fn run_heartbeat(
         actions.push(json!({"phase": "loop", "result": second_loop}));
     }
     let mut dispatched = Vec::new();
-    for _ in 0..max_dispatches {
+    for _ in 0..max_dispatches.min(1) {
         let Some(workorder) = first_ready_workorder(conn, target_id)? else {
             break;
         };
@@ -1261,6 +1452,7 @@ pub fn run_heartbeat(
         }
         let package = dispatch_runner_plan(conn, target_id, workorder_id, Some(worker_id))?;
         dispatched.push(package);
+        break;
     }
     let last_loop_result = actions
         .last()
@@ -1312,9 +1504,36 @@ pub fn dispatch_runner_plan(
 ) -> Result<Value> {
     ensure_target_exists(conn, target_id)?;
     ensure_workorder_exists(conn, target_id, workorder_id)?;
+    let status = workorder_status(conn, target_id, workorder_id)?;
+    if status == "handoff_ready" {
+        bail!("workorder already has a runner handoff: {workorder_id}");
+    }
+    if status != "queued" && status != "ready_for_worker" {
+        bail!("workorder {workorder_id} is not dispatchable from status {status}");
+    }
+    if let Some(active) = active_workorder(conn, target_id, Some(workorder_id))? {
+        bail!(
+            "target {target_id} already has active workorder {} ({})",
+            active
+                .get("workorder_id")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown"),
+            active
+                .get("workorder_status")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+        );
+    }
     let worker = worker_id
         .map(|id| ensure_worker_matches_workorder(conn, target_id, workorder_id, id))
         .transpose()?;
+    let target = target_payload(conn, target_id)?;
+    let worktree = ensure_shared_worktree(conn, target_id, &target)?;
+    let working_directory = worktree
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_owned();
     let now = now_iso();
     let placeholder = json!({
         "runner": "codex-app",
@@ -1335,7 +1554,6 @@ pub fn dispatch_runner_plan(
         ],
     )?;
     let runner_id = conn.last_insert_rowid();
-    let target = target_payload(conn, target_id)?;
     let workorder = get_workorder(conn, target_id, workorder_id)?;
     let custom_instructions = prompt_custom_instructions(conn, target_id, &worker)?;
     let dirs = ensure_app_dirs()?;
@@ -1367,7 +1585,11 @@ pub fn dispatch_runner_plan(
     let handoff = format!(
         r#"# Codex Automation Handoff
 
-Open the target repository in Codex App and give the worker the contents of:
+Open the shared worktree in Codex App and give the worker the contents of:
+
+`{}`
+
+Working directory:
 
 `{}`
 
@@ -1388,6 +1610,7 @@ Then run:
 ```
 "#,
         display_path(&prompt_path),
+        working_directory,
         display_path(&result_path),
     );
     fs::write(&handoff_path, handoff)
@@ -1402,6 +1625,8 @@ Then run:
         "worker": worker,
         "target": target,
         "workorder": workorder,
+        "working_directory": working_directory,
+        "worktree": worktree,
         "handoff": {
             "status": "ready",
             "medium": "codex_app",
