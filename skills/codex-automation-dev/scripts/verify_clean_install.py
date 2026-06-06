@@ -172,8 +172,8 @@ def verify(repo: Path, fixture: Path, target_id: str, profile: str, keep_temp: b
     if not (app_home / "codex-automation.sqlite").is_file():
         raise AssertionError("SQLite app database was not created")
     dispatched = setup.get("heartbeat", {}).get("dispatched", [])
-    if not any(item.get("status") == "package_ready" for item in dispatched):
-        raise AssertionError("setup heartbeat did not create a runner package")
+    if not any(item.get("status") == "handoff_ready" for item in dispatched):
+        raise AssertionError("setup heartbeat did not create a runner handoff")
 
     result = {
         "status": "ok",

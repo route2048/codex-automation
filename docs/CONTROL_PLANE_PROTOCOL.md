@@ -74,7 +74,6 @@ codex-automation result submit <target-id> --from-file result.json
 - `fixed`
 - `failed`
 - `needs_more_investigation`
-- `runner_lost_before_result`
 - `staging_deploy_blocked`
 - `staging_deployed`
 - `stale_or_invalid`
@@ -159,13 +158,11 @@ execution is not started by this command.
 
 ```bash
 codex-automation heartbeat run <target-id> --json
-CODEX_AUTOMATION_ENABLE_RUNNER_EXECUTION=1 codex-automation heartbeat run <target-id> --execute --json
 ```
 
 The heartbeat refreshes runner state, regenerates the target pack, advances one
 loop step, selects a compatible worker for ready work, and creates a runner
-package. With `--execute`, it also starts the runner after checking the
-execution gate and worker concurrency.
+handoff package. It does not launch Codex processes.
 
 ## Runner
 
@@ -173,8 +170,6 @@ Runner dispatch creates a package for a Codex worker:
 
 ```bash
 codex-automation runner dispatch <target-id> --workorder-id <workorder-id> --worker <worker-id> --json
-CODEX_AUTOMATION_ENABLE_RUNNER_EXECUTION=1 \
-  codex-automation runner dispatch <target-id> --workorder-id <workorder-id> --worker <worker-id> --execute --json
 codex-automation runner refresh <target-id> --json
 codex-automation runner list <target-id> --json
 codex-automation runner status <target-id> <runner-id> --json
@@ -184,18 +179,16 @@ The package is stored under OS app data `artifacts/runners/` and contains:
 
 - `prompt.md`: the worker prompt, boundaries, workorder payload, and result
   contract
-- `result.schema.json`: the final JSON result schema for `codex exec`
+- `handoff.md`: the short operator handoff for Codex App
+- `result.json`: optional file where a worker or controller can save the final
+  result JSON for ingestion
 - `command.json`: the machine-readable runner metadata stored in SQLite
 
-`--execute` is gated by `CODEX_AUTOMATION_ENABLE_RUNNER_EXECUTION=1`. When
-enabled, the launcher starts `codex exec` with the generated prompt on stdin,
-captures stdout/stderr logs, writes the final message to the package directory,
-and stores the PID in SQLite. It never passes `--model` or
-`model_reasoning_effort`.
-
-Workers should submit results with `codex-automation result submit`. If their
-sandbox prevents that, the final response can be the schema-matching JSON
-result; `runner refresh` ingests it into the normal result table.
+Runner packages are Codex App handoffs. `codex-automation` does not launch
+headless Codex processes, manage PIDs, or capture worker stdout/stderr.
+Workers should submit results with `codex-automation result submit` when that is
+available. If they instead return a final JSON object, save it to the package
+`result.json`; `runner refresh` ingests it into the normal result table.
 
 ## Approval
 

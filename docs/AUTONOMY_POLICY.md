@@ -12,8 +12,8 @@ human first.
 - `release`: release preparation is allowed, but push and deploy still require approval.
 
 The current Rust core records the selected profile on each registered target.
-Runner dispatch creates a package for a worker and can start a detached
-`codex exec` process only when the explicit execution environment gate is set.
+Runner dispatch creates a Codex App handoff package for a worker. It must not
+start headless Codex processes.
 The target profile is an upper bound, not permission to skip explicit approval
 gates.
 
@@ -25,11 +25,8 @@ gates.
 - runner dispatch with `--worker` validates worker/workorder kind compatibility
 - runner dispatch generates `prompt.md` and `command.json` under app-state
   artifacts
-- runner dispatch with `--execute` starts Codex only when
-  `CODEX_AUTOMATION_ENABLE_RUNNER_EXECUTION=1` is set
-- runner launch never passes model overrides
-- runner refresh tracks PID state and ingests schema-matching final JSON
-  results
+- runner dispatch creates handoff packages only
+- runner refresh ingests submitted results or package `result.json` files
 - worker results are validated before becoming durable state
 - result statuses such as `approval_required` and `safe_fix_candidate` map to
   `needs_user` workorder state

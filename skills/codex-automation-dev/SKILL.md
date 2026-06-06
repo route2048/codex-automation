@@ -24,10 +24,13 @@ checks, but it should not be installed as part of target-repository setup.
    `python3 skills/codex-automation-dev/scripts/verify_clean_install.py --repo <repo> --json`.
 4. Verify local skill installation from the source skill directory:
    `python3 skills/codex-automation-dev/scripts/verify_skill_install.py --repo <repo> --install-setup-skill --install-dev-skill --overwrite --json`.
-5. Run Docker clean install only when the user explicitly wants disposable
+5. When evaluating unpublished setup-skill changes, do not mix the source skill
+   with the latest GitHub Release binary. Install or expose the source binary
+   first, or set `CODEX_AUTOMATION_BIN=<repo>/target/debug/codex-automation`.
+6. Run Docker clean install only when the user explicitly wants disposable
    Linux verification and Docker is available:
    `bash skills/codex-automation-dev/scripts/verify_docker_install.sh <repo>`.
-6. Keep target-specific smoke checks out of this public skill. If a maintainer
+7. Keep target-specific smoke checks out of this public skill. If a maintainer
    needs project-specific validation, record it in a private report or a
    private skill that is not included in the public export.
 
@@ -35,7 +38,8 @@ checks, but it should not be installed as part of target-repository setup.
 
 - Do not push to GitHub.
 - Do not install this skill in normal user environments.
-- Do not run `--execute` unless the user explicitly asks for a real runner.
+- Do not start headless Codex runners; verification should stop at handoff and
+  result ingestion.
 - Do not deploy or run Docker Compose.
 - Keep all install smoke state under temporary directories by setting
   `CODEX_AUTOMATION_HOME`.

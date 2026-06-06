@@ -53,8 +53,8 @@ skills should be written to app-managed artifacts or explicitly exported into
 the control workspace when a human wants to inspect them.
 
 Generated runner prompts should ask workers to report through
-`codex-automation result submit`. Result JSON files are useful as import/export
-artifacts, but the CLI submission event is the primary state transition. When a
-worker sandbox cannot write app-state directly, the worker can return a final
-JSON object matching the generated `result.schema.json`; `runner refresh`
-ingests it into the same result table.
+`codex-automation result submit` when available. Result JSON is also a first
+class handoff path: a worker can return a final JSON object with `workorder_id`,
+`status`, `summary`, and `next_action`; the controller can save it to the runner
+package `result.json`, and `runner refresh` ingests it into the same result
+table.

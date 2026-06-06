@@ -18,6 +18,7 @@ const SETUP_SKILL_NAME: &str = "codex-automation-setup";
 
 #[derive(Debug, Parser)]
 #[command(name = "codex-automation")]
+#[command(version)]
 #[command(about = "Local-first Codex automation control app")]
 struct Cli {
     #[arg(long, global = true)]
@@ -92,6 +93,10 @@ struct InitArgs {
     profile: String,
     #[arg(long)]
     overwrite_workspace: bool,
+    #[arg(long)]
+    plan: bool,
+    #[arg(long)]
+    dry_run: bool,
 }
 
 #[derive(Debug, Args)]
@@ -199,8 +204,6 @@ struct HeartbeatRunArgs {
     target_id: String,
     #[arg(long)]
     dry_run: bool,
-    #[arg(long)]
-    execute: bool,
     #[arg(long, default_value_t = 1)]
     max_dispatches: usize,
 }
@@ -328,8 +331,6 @@ struct RunnerDispatchArgs {
     workorder_id: String,
     #[arg(long)]
     worker: Option<String>,
-    #[arg(long)]
-    execute: bool,
 }
 
 #[derive(Debug, Args)]
@@ -432,15 +433,11 @@ fn run(command: Command) -> Result<Value> {
         },
         Command::Heartbeat { command } => match command {
             HeartbeatCommand::Run(args) => {
-                if args.execute {
-                    ensure_runner_execution_enabled()?;
-                }
                 let mut conn = storage::connect()?;
                 control::run_heartbeat(
                     &mut conn,
                     &args.target_id,
                     args.dry_run,
-                    args.execute,
                     args.max_dispatches,
                 )
             }
@@ -523,25 +520,13 @@ fn run(command: Command) -> Result<Value> {
         },
         Command::Runner { command } => match command {
             RunnerCommand::Dispatch(args) => {
-                if args.execute {
-                    ensure_runner_execution_enabled()?;
-                }
                 let conn = storage::connect()?;
-                let package = control::dispatch_runner_plan(
+                control::dispatch_runner_plan(
                     &conn,
                     &args.target_id,
                     &args.workorder_id,
                     args.worker.as_deref(),
-                )?;
-                if args.execute {
-                    let runner_id = package
-                        .get("runner_id")
-                        .and_then(Value::as_i64)
-                        .context("runner_id is missing from runner package")?;
-                    control::start_runner_package(&conn, &args.target_id, runner_id)
-                } else {
-                    Ok(package)
-                }
+                )
             }
             RunnerCommand::List(args) => {
                 let conn = storage::connect()?;
@@ -618,9 +603,7 @@ fn run_update(args: UpdateArgs) -> Result<Value> {
     };
     let heartbeat = if let Some(target_id) = args.target_id.as_deref() {
         let mut conn = storage::connect()?;
-        Some(control::run_heartbeat(
-            &mut conn, target_id, true, false, 1,
-        )?)
+        Some(control::run_heartbeat(&mut conn, target_id, true, 1)?)
     } else {
         None
     };
@@ -641,7 +624,8 @@ fn run_update(args: UpdateArgs) -> Result<Value> {
         "target": target_status,
         "target_pack": target_pack,
         "heartbeat": heartbeat,
-        "runner_execution": "not_started",
+        "runner_execution": "not_supported",
+        "runner_handoff": "codex_app",
     }))
 }
 
@@ -856,6 +840,9 @@ fn reject_dangerous_delete_path(path: &Path) -> Result<()> {
 fn run_init(args: InitArgs) -> Result<Value> {
     let control_workspace = expand_path(&args.workspace)?;
     let clone_dir = expand_path(&args.clone_dir)?;
+    if args.plan || args.dry_run {
+        return run_init_plan(args, &control_workspace, &clone_dir);
+    }
     let target_record = resolve_target_arg(&args.target, &clone_dir)?;
     let target_path = PathBuf::from(
         target_record
@@ -874,6 +861,8 @@ fn run_init(args: InitArgs) -> Result<Value> {
             .context("target path must have a directory name")?;
         workspace::slugify_id(name)
     };
+    let workspace_destination = workspace::workspace_destination_status(&control_workspace)?;
+    let target_git_before = control::inspect_git_state(&target_path);
 
     let doctor_dirs = ensure_app_dirs()?;
     let doctor = json!({"status": "ok", "app_state": doctor_dirs.as_json()});
@@ -917,8 +906,10 @@ fn run_init(args: InitArgs) -> Result<Value> {
         )?);
     }
     let target_pack = control::generate_target_pack(&conn, &resolved_target_id)?;
-    let heartbeat = control::run_heartbeat(&mut conn, &resolved_target_id, false, false, 1)?;
+    let heartbeat = control::run_heartbeat(&mut conn, &resolved_target_id, false, 1)?;
     let target_status = workspace::target_status(&resolved_target_id)?;
+    let target_git_after = control::inspect_git_state(&target_path);
+    let target_git_unchanged = target_git_before == target_git_after;
     let paths = paths_summary(Some(&control_workspace))?;
     let targets = workspace::list_targets(Some(&control_workspace))?;
     let app_state = paths.get("app_state").cloned().unwrap_or(Value::Null);
@@ -938,6 +929,12 @@ fn run_init(args: InitArgs) -> Result<Value> {
         },
         "doctor": doctor,
         "db": db,
+        "workspace_destination": workspace_destination,
+        "target_git": {
+            "before": target_git_before,
+            "after": target_git_after,
+            "unchanged": target_git_unchanged,
+        },
         "workspace_action": workspace_action,
         "workspace": workspace_payload,
         "target_registration": target_payload,
@@ -950,10 +947,82 @@ fn run_init(args: InitArgs) -> Result<Value> {
         "handoff": {
             "control_workspace": control_workspace.to_string_lossy(),
             "app_state": app_state,
+            "binary_path": std::env::current_exe()
+                .ok()
+                .map(|path| path.to_string_lossy().into_owned()),
             "target_config_path": target_config_path,
             "worker_config_paths": worker_config_paths,
-            "next_prompt": "Open the control workspace in Codex App. Inspect the heartbeat output and runner package before enabling execution.",
+            "next_prompt": "Open the control workspace in Codex App. Inspect the heartbeat output and hand the runner package prompt to a worker thread.",
         },
+    }))
+}
+
+fn run_init_plan(args: InitArgs, control_workspace: &Path, clone_dir: &Path) -> Result<Value> {
+    let target_record = plan_target_arg(&args.target, clone_dir)?;
+    let target_path = PathBuf::from(
+        target_record
+            .get("path")
+            .and_then(Value::as_str)
+            .context("planned target path is missing")?,
+    );
+    let resolved_target_id = if let Some(target_id) = args.target_id {
+        target_id
+    } else if is_git_url(&args.target) {
+        workspace::slugify_id(&repo_name_from_url(&args.target)?)
+    } else {
+        let name = target_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .context("target path must have a directory name")?;
+        workspace::slugify_id(name)
+    };
+    let dirs = app_dirs()?;
+    let workspace_destination = workspace::workspace_destination_status(control_workspace)?;
+    let workspace_config = control_workspace.join("codex-automation.toml");
+    let target_config = control_workspace
+        .join("targets")
+        .join(format!("{resolved_target_id}.toml"));
+    let worker_config_paths: Vec<String> = DEFAULT_RUNNER_WORKERS
+        .iter()
+        .map(|file| {
+            control_workspace
+                .join("workers")
+                .join(file)
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    Ok(json!({
+        "status": "planned",
+        "dry_run": true,
+        "target": target_record,
+        "target_id": resolved_target_id,
+        "profile": args.profile,
+        "writes": {
+            "control_workspace": {
+                "path": control_workspace.to_string_lossy(),
+                "exists": control_workspace.exists(),
+                "destination_status": workspace_destination,
+                "config_path": workspace_config.to_string_lossy(),
+                "target_config_path": target_config.to_string_lossy(),
+                "worker_config_paths": worker_config_paths,
+            },
+            "app_state": dirs.as_json(),
+            "target_repo": {
+                "path": target_path.to_string_lossy(),
+                "will_write": false,
+                "git": control::inspect_git_state(&target_path),
+            },
+        },
+        "planned_actions": [
+            "run doctor and db doctor",
+            "initialize or reuse the thin control workspace",
+            "register the target in SQLite",
+            "write targets/<id>.toml and default workers in the control workspace",
+            "generate target pack under OS app-state artifacts",
+            "create the first repo_discovery workorder",
+            "create a Codex App handoff package without launching Codex processes"
+        ],
     }))
 }
 
@@ -988,6 +1057,26 @@ fn resolve_target_arg(target: &str, clone_dir: &Path) -> Result<Value> {
         "kind": "local_path",
         "action": "resolved",
         "path": path.to_string_lossy(),
+    }))
+}
+
+fn plan_target_arg(target: &str, clone_dir: &Path) -> Result<Value> {
+    if is_git_url(target) {
+        let destination = clone_dir.join(repo_name_from_url(target)?);
+        return Ok(json!({
+            "kind": "git_url",
+            "action": if destination.exists() { "would_pull" } else { "would_clone" },
+            "url": target,
+            "path": destination.to_string_lossy(),
+            "exists": destination.exists(),
+        }));
+    }
+    let path = expand_path(Path::new(target))?;
+    Ok(json!({
+        "kind": "local_path",
+        "action": "would_resolve",
+        "path": path.to_string_lossy(),
+        "exists": path.is_dir(),
     }))
 }
 
@@ -1062,18 +1151,6 @@ fn expand_path(path: &Path) -> Result<PathBuf> {
         std::env::current_dir()?.join(path)
     };
     Ok(expanded.canonicalize().unwrap_or(expanded))
-}
-
-fn ensure_runner_execution_enabled() -> Result<()> {
-    if std::env::var("CODEX_AUTOMATION_ENABLE_RUNNER_EXECUTION")
-        .ok()
-        .as_deref()
-        == Some("1")
-    {
-        Ok(())
-    } else {
-        anyhow::bail!("runner execution is gated; omit --execute to create a runner package, or set CODEX_AUTOMATION_ENABLE_RUNNER_EXECUTION=1 after reviewing the generated prompt")
-    }
 }
 
 fn worker_payload_from_file(path: &PathBuf) -> Result<Value> {

@@ -34,7 +34,12 @@ def resolve_binary(args: argparse.Namespace) -> tuple[Path, dict[str, object]]:
         }
     install_dir = args.install_dir.expanduser() if args.install_dir else default_install_dir()
     if args.check:
-        path = ensure_binary(repo=args.repo, version=args.version, install_dir=install_dir)
+        path = ensure_binary(
+            repo=args.repo,
+            version=args.version,
+            install_dir=install_dir,
+            allow_missing_checksum=args.allow_missing_checksum,
+        )
         return path, {
             "status": "checked",
             "binary": str(path),
@@ -46,6 +51,7 @@ def resolve_binary(args: argparse.Namespace) -> tuple[Path, dict[str, object]]:
         version=args.version,
         install_dir=install_dir,
         force=True,
+        allow_missing_checksum=args.allow_missing_checksum,
     )
     payload["updated"] = True
     return Path(str(payload["binary"])), payload
@@ -88,6 +94,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--workspace", help="Optional thin control workspace")
     parser.add_argument("--target-id", help="Optional target id to inspect")
     parser.add_argument("--check", action="store_true", help="Inspect without replacing the binary")
+    parser.add_argument(
+        "--allow-missing-checksum",
+        action="store_true",
+        help="Allow binary replacement when SHA256SUMS is unavailable; use only for trusted testing.",
+    )
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
 

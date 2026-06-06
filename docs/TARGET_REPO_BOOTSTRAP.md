@@ -46,11 +46,40 @@ curl -fsSL https://github.com/route2048/codex-automation/releases/latest/downloa
 The setup skill installs the released binary when `codex-automation` is not
 already available on `PATH`.
 
+Confirm the binary and inspect existing state before setup:
+
+```bash
+codex-automation --version
+codex-automation doctor --json
+codex-automation db doctor --json
+codex-automation paths --json
+codex-automation target list --json
+```
+
+If `paths --json` shows `control_workspace: null`, no workspace was supplied to
+that command. Pass `--workspace <control-workspace>` when inspecting a chosen
+control workspace.
+If an older release binary rejects `--version`, continue with `--help` and
+`doctor --json`, then update the binary.
+
+Preview setup before writing:
+
+```bash
+codex-automation init ~/workspace/target-repo --workspace ~/workspace/codex-automation --profile balanced --plan --json
+```
+
 One-command setup:
 
 ```bash
 codex-automation init ~/workspace/target-repo --workspace ~/workspace/codex-automation --profile balanced --json
 ```
+
+Use one-command setup only for a new target registration. If `target list
+--json` already shows the target, use the update flow instead. `init` creates
+the first workorder and Codex App handoff package, but it does not launch
+detached or headless Codex processes.
+The handoff includes the resolved binary path for agents whose shell does not
+have `codex-automation` on `PATH`.
 
 Manual setup:
 
@@ -66,6 +95,10 @@ codex-automation db doctor --json
 codex-automation target status my-app --json
 codex-automation heartbeat run my-app --json
 ```
+
+Target packs include Git branch/head/dirty counts when the target is a Git
+checkout. Treat dirty state as a context signal; setup still must not edit the
+target repo.
 
 Customize `workers/control-plane.toml`, runnable `workers/*.toml`, and
 `targets/my-app.toml` before execution when the target needs local policy.

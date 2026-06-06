@@ -112,7 +112,6 @@ codex-automation worker add my-app --from-file ~/workspace/codex-automation/work
 codex-automation db doctor --json
 codex-automation heartbeat run my-app --json
 codex-automation prompt render my-app --workorder-id demo --worker repo-maintainer --json
-CODEX_AUTOMATION_ENABLE_RUNNER_EXECUTION=1 codex-automation heartbeat run my-app --execute --json
 codex-automation runner refresh my-app --json
 codex-automation result submit my-app --workorder-id demo --status fixed --summary "..." --next-action no_action
 ```

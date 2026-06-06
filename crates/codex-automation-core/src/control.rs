@@ -7,9 +7,8 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 #[derive(Debug, Default)]
 struct PromptCustomInstructions {
@@ -180,6 +179,49 @@ fn instruction_block(label: &str, text: &str) -> String {
     }
 }
 
+fn automation_binary_path() -> String {
+    env::current_exe()
+        .ok()
+        .map(|path| display_path(&path))
+        .unwrap_or_else(|| "codex-automation".to_owned())
+}
+
+fn result_submit_prefix(target_id: &str, workorder_id: &str) -> String {
+    format!(
+        "{} result submit {target_id} --workorder-id {workorder_id}",
+        automation_binary_path()
+    )
+}
+
+fn workorder_target_pack_path(workorder: &Value) -> Option<String> {
+    workorder
+        .pointer("/payload/target_pack_path")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
+fn repository_state_block(workorder: &Value) -> String {
+    let Some(pack_path) = workorder_target_pack_path(workorder) else {
+        return "Target pack: not recorded on this workorder.\n".to_owned();
+    };
+    let mut lines = vec![format!("Target pack: {pack_path}")];
+    let pack = fs::read_to_string(&pack_path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+    if let Some(git) = pack.as_ref().and_then(|value| value.pointer("/git")) {
+        lines.push("Git state from target pack:".to_owned());
+        lines.push("```json".to_owned());
+        lines.push(serde_json::to_string_pretty(git).unwrap_or_else(|_| "{}".to_owned()));
+        lines.push("```".to_owned());
+    } else {
+        lines.push(
+            "Git state: unavailable; inspect the target checkout before assuming it is clean."
+                .to_owned(),
+        );
+    }
+    lines.join("\n")
+}
+
 fn ensure_worker_matches_workorder(
     conn: &Connection,
     target_id: &str,
@@ -338,8 +380,8 @@ fn render_runner_prompt(
         "Worker (`workers/<worker-id>.toml`)",
         &custom_instructions.worker,
     );
-    let result_command =
-        format!("codex-automation result submit {target_id} --workorder-id {workorder_id}");
+    let result_command = result_submit_prefix(target_id, workorder_id);
+    let repository_state = repository_state_block(workorder);
     let result_examples = if sandbox == "read-only" || workorder_kind.contains("discovery") {
         format!(
             r#"{result_command} --status discovery_no_findings --summary "..." --next-action no_action --json
@@ -357,9 +399,9 @@ fn render_runner_prompt(
     };
 
     Ok(format!(
-        r#"# Codex Automation Worker Package
+        r#"# Codex Automation Worker Handoff
 
-You are running as a Codex automation worker.
+You are acting as a Codex automation worker from a Codex App handoff.
 
 ## Assignment
 
@@ -370,13 +412,17 @@ You are running as a Codex automation worker.
 - Workorder title: {workorder_title}
 - Worker: {worker_name} ({worker_id})
 
+## Repository State
+
+{repository_state}
+
 ## Operating Boundaries
 
 - Obey the target repository instructions, including AGENTS.md files.
 - Do not specify model or model_reasoning_effort in Codex calls.
 - Do not push, deploy, delete data, or start long-running services unless the workorder explicitly grants that authority.
 - Respect the worker sandbox, approval policy, autonomy profile, and instructions below.
-- Record completion through the codex-automation CLI. Do not edit SQLite or app-state files by hand.
+- Record completion through the codex-automation CLI when available. Do not edit SQLite or app-state files by hand.
 
 ## Custom Instructions
 
@@ -395,10 +441,10 @@ When finished, prefer running one of these forms:
 {result_examples}
 ```
 
-If sandboxing prevents the CLI submission, make your final response exactly one
-JSON object with these fields: `workorder_id`, `status`, `summary`, and
-`next_action`. The controller will ingest that final JSON during
-`codex-automation runner refresh`.
+If the CLI submission is unavailable, make your final response exactly one JSON
+object with these fields: `workorder_id`, `status`, `summary`, and
+`next_action`. The controller can save that object to the package `result.json`
+and ingest it with the runner refresh command from `handoff.md`.
 
 ## Worker Definition
 
@@ -413,40 +459,6 @@ JSON object with these fields: `workorder_id`, `status`, `summary`, and
 ```
 "#
     ))
-}
-
-fn result_schema() -> Value {
-    json!({
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "codex-automation worker result",
-        "type": "object",
-        "required": ["workorder_id", "status", "summary", "next_action"],
-        "additionalProperties": true,
-        "properties": {
-            "workorder_id": {"type": "string", "minLength": 1},
-            "status": {
-                "type": "string",
-                "enum": [
-                    "approval_required",
-                    "blocked",
-                    "discovery_findings",
-                    "discovery_no_findings",
-                    "failed",
-                    "fixed",
-                    "needs_more_investigation",
-                    "runner_lost_before_result",
-                    "safe_fix_candidate",
-                    "staging_deploy_blocked",
-                    "staging_deployed",
-                    "stale_or_invalid",
-                    "tests_failed",
-                    "tests_passed"
-                ]
-            },
-            "summary": {"type": "string", "minLength": 1},
-            "next_action": {"type": "string", "minLength": 1}
-        }
-    })
 }
 
 fn is_ignored_scan_dir(name: &str) -> bool {
@@ -636,10 +648,78 @@ fn repo_scan(root: &Path) -> Result<Value> {
     }))
 }
 
+fn run_git(root: &Path, args: &[&str]) -> std::result::Result<String, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        let message = if stderr.is_empty() { stdout } else { stderr };
+        return Err(message);
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+pub fn inspect_git_state(root: &Path) -> Value {
+    let head = match run_git(root, &["rev-parse", "HEAD"]) {
+        Ok(value) => value,
+        Err(error) => {
+            return json!({
+                "status": "not_available",
+                "reason": error,
+                "dirty": null,
+            })
+        }
+    };
+    let branch = run_git(root, &["branch", "--show-current"]).unwrap_or_default();
+    let status_text = run_git(root, &["status", "--porcelain=v1", "--branch"])
+        .unwrap_or_else(|error| format!("## status unavailable: {error}"));
+    let mut branch_status = String::new();
+    let mut staged = 0;
+    let mut unstaged = 0;
+    let mut untracked = 0;
+    let mut changed = 0;
+    for line in status_text.lines() {
+        if line.starts_with("## ") {
+            branch_status = line.to_owned();
+            continue;
+        }
+        if line.starts_with("??") {
+            untracked += 1;
+            changed += 1;
+            continue;
+        }
+        let bytes = line.as_bytes();
+        if bytes.first().copied().unwrap_or(b' ') != b' ' {
+            staged += 1;
+        }
+        if bytes.get(1).copied().unwrap_or(b' ') != b' ' {
+            unstaged += 1;
+        }
+        changed += 1;
+    }
+    json!({
+        "status": "ok",
+        "branch": branch,
+        "head": head,
+        "branch_status": branch_status,
+        "dirty": changed > 0,
+        "changed_count": changed,
+        "staged_count": staged,
+        "unstaged_count": unstaged,
+        "untracked_count": untracked,
+    })
+}
+
 pub fn generate_target_pack(conn: &Connection, target_id: &str) -> Result<Value> {
     let target = target_payload(conn, target_id)?;
     let repo_path = PathBuf::from(value_string(&target, "/repo_path", "target repo path")?);
     let scan = repo_scan(&repo_path)?;
+    let git = inspect_git_state(&repo_path);
     let dirs = ensure_app_dirs()?;
     let target_segment = path_segment(target_id, "target id")?;
     let pack_root = dirs.artifacts.join("targets").join(target_segment);
@@ -653,6 +733,7 @@ pub fn generate_target_pack(conn: &Connection, target_id: &str) -> Result<Value>
         "target_id": target_id,
         "generated_at": generated_at,
         "target": target,
+        "git": git,
         "scan": scan,
     });
     fs::write(&pack_path, serde_json::to_string_pretty(&pack)?)
@@ -730,58 +811,6 @@ fn result_count_for_workorder(
         |row| row.get(0),
     )
     .context("failed to count workorder results")
-}
-
-fn running_count_for_worker(conn: &Connection, target_id: &str, worker_id: &str) -> Result<usize> {
-    let runners = list_runner_runs(conn, target_id)?;
-    let rows = runners
-        .get("runner_runs")
-        .and_then(Value::as_array)
-        .context("runner_runs is missing")?;
-    let mut count = 0;
-    for runner in rows {
-        let status = runner
-            .get("runner_status")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if status != "running" {
-            continue;
-        }
-        let same_worker =
-            runner.pointer("/command/worker/id").and_then(Value::as_str) == Some(worker_id);
-        if !same_worker {
-            continue;
-        }
-        let alive = runner
-            .pointer("/command/execution/pid")
-            .and_then(Value::as_u64)
-            .and_then(|pid| pid_alive(pid as u32));
-        if alive != Some(false) {
-            count += 1;
-        }
-    }
-    Ok(count)
-}
-
-#[cfg(unix)]
-fn pid_alive(pid: u32) -> Option<bool> {
-    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    if rc == 0 {
-        return Some(true);
-    }
-    let code = std::io::Error::last_os_error().raw_os_error();
-    if code == Some(libc::EPERM) {
-        Some(true)
-    } else if code == Some(libc::ESRCH) {
-        Some(false)
-    } else {
-        None
-    }
-}
-
-#[cfg(not(unix))]
-fn pid_alive(_pid: u32) -> Option<bool> {
-    None
 }
 
 pub fn add_worker(conn: &Connection, target_id: &str, payload: Value) -> Result<Value> {
@@ -1117,7 +1146,7 @@ pub fn run_loop_once(conn: &Connection, target_id: &str, dry_run: bool) -> Resul
         .query_row(
             "SELECT id, kind, title, status FROM workorders
              WHERE target_id = ?1
-               AND status IN ('ready_for_worker', 'runner_planned', 'runner_running', 'needs_user')
+               AND status IN ('ready_for_worker', 'handoff_ready', 'needs_user')
              ORDER BY created_at, id LIMIT 1",
             params![target_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
@@ -1176,7 +1205,6 @@ pub fn run_heartbeat(
     conn: &mut Connection,
     target_id: &str,
     dry_run: bool,
-    execute: bool,
     max_dispatches: usize,
 ) -> Result<Value> {
     ensure_target_exists(conn, target_id)?;
@@ -1227,29 +1255,51 @@ pub fn run_heartbeat(
                 "workorder_id": workorder_id,
                 "kind": kind,
                 "worker_id": worker_id,
-                "execute": execute,
+                "handoff": "planned",
             }));
             break;
         }
         let package = dispatch_runner_plan(conn, target_id, workorder_id, Some(worker_id))?;
-        if execute {
-            let runner_id = package
-                .get("runner_id")
-                .and_then(Value::as_i64)
-                .context("runner_id is missing from runner package")?;
-            dispatched.push(start_runner_package(conn, target_id, runner_id)?);
-        } else {
-            dispatched.push(package);
-        }
+        dispatched.push(package);
     }
+    let last_loop_result = actions
+        .last()
+        .and_then(|action| action.get("result"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    let dispatch_summary = if dispatched.is_empty() {
+        let loop_status = last_loop_result
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let reason = match loop_status {
+            "active_workorder_exists" => "active_workorder_exists",
+            "planned" => "dry_run_no_ready_workorders",
+            _ => "no_ready_workorders",
+        };
+        json!({
+            "status": "idle",
+            "reason": reason,
+            "dispatched_count": 0,
+            "loop_status": loop_status,
+            "active_workorder": last_loop_result,
+        })
+    } else {
+        json!({
+            "status": "dispatched",
+            "dispatched_count": dispatched.len(),
+        })
+    };
     Ok(json!({
         "status": "ok",
         "target_id": target_id,
         "dry_run": dry_run,
-        "execute": execute,
+        "execution": "codex_app_handoff",
+        "runner_execution": "package_only",
         "refresh": refresh,
         "target_pack": pack,
         "actions": actions,
+        "dispatch_summary": dispatch_summary,
         "dispatched": dispatched,
     }))
 }
@@ -1267,15 +1317,15 @@ pub fn dispatch_runner_plan(
         .transpose()?;
     let now = now_iso();
     let placeholder = json!({
-        "runner": "codex-cli",
-        "mode": "package_pending",
+        "runner": "codex-app",
+        "mode": "handoff_pending",
         "target_id": target_id,
         "workorder_id": workorder_id,
         "worker": worker.clone(),
     });
     conn.execute(
         "INSERT INTO runner_runs(target_id, workorder_id, status, command_json, created_at, updated_at)
-         VALUES (?1, ?2, 'package_pending', ?3, ?4, ?5)",
+         VALUES (?1, ?2, 'handoff_pending', ?3, ?4, ?5)",
         params![
             target_id,
             workorder_id,
@@ -1298,8 +1348,12 @@ pub fn dispatch_runner_plan(
     fs::create_dir_all(&package_dir)
         .with_context(|| format!("failed to create {}", display_path(&package_dir)))?;
     let prompt_path = package_dir.join("prompt.md");
+    let handoff_path = package_dir.join("handoff.md");
     let command_path = package_dir.join("command.json");
-    let result_schema_path = package_dir.join("result.schema.json");
+    let result_path = package_dir.join("result.json");
+    let binary_path = automation_binary_path();
+    let result_command = result_submit_prefix(target_id, workorder_id);
+    let refresh_command = format!("{binary_path} runner refresh {target_id} --json");
     let prompt = render_runner_prompt(
         target_id,
         workorder_id,
@@ -1310,41 +1364,70 @@ pub fn dispatch_runner_plan(
     )?;
     fs::write(&prompt_path, prompt)
         .with_context(|| format!("failed to write {}", display_path(&prompt_path)))?;
-    fs::write(
-        &result_schema_path,
-        serde_json::to_string_pretty(&result_schema())?,
-    )
-    .with_context(|| format!("failed to write {}", display_path(&result_schema_path)))?;
+    let handoff = format!(
+        r#"# Codex Automation Handoff
+
+Open the target repository in Codex App and give the worker the contents of:
+
+`{}`
+
+When the worker finishes, record the result with:
+
+```bash
+{result_command} --status <status> --summary "..." --next-action <action> --json
+```
+
+If the worker returns a final JSON object instead, save that object to:
+
+`{}`
+
+Then run:
+
+```bash
+{refresh_command}
+```
+"#,
+        display_path(&prompt_path),
+        display_path(&result_path),
+    );
+    fs::write(&handoff_path, handoff)
+        .with_context(|| format!("failed to write {}", display_path(&handoff_path)))?;
     let command = json!({
-        "runner": "codex-cli",
-        "mode": "package",
+        "runner": "codex-app",
+        "mode": "handoff",
+        "execution": "package_only",
+        "binary_path": binary_path,
         "target_id": target_id,
         "workorder_id": workorder_id,
         "worker": worker,
         "target": target,
         "workorder": workorder,
-        "execution": {
-            "status": "not_started",
-            "execute_requested": false,
-            "gate": "CODEX_AUTOMATION_ENABLE_RUNNER_EXECUTION=1 is required before process launch is allowed"
+        "handoff": {
+            "status": "ready",
+            "medium": "codex_app",
+            "instructions": "Open prompt_path in Codex App or paste its contents into a worker thread. codex-automation does not launch Codex processes.",
+            "result_path": display_path(&result_path)
         },
         "package": {
             "root": display_path(&package_dir),
             "prompt_path": display_path(&prompt_path),
+            "handoff_path": display_path(&handoff_path),
             "command_path": display_path(&command_path),
-            "result_schema_path": display_path(&result_schema_path)
+            "result_path": display_path(&result_path)
         },
         "result_contract": {
-            "command": "codex-automation result submit",
+            "command": result_command,
+            "refresh_command": refresh_command,
             "target_id": target_id,
-            "workorder_id": workorder_id
+            "workorder_id": workorder_id,
+            "final_json_fields": ["workorder_id", "status", "summary", "next_action"]
         }
     });
     fs::write(&command_path, serde_json::to_string_pretty(&command)?)
         .with_context(|| format!("failed to write {}", display_path(&command_path)))?;
     let updated_at = now_iso();
     conn.execute(
-        "UPDATE runner_runs SET status = 'package_ready', command_json = ?1, updated_at = ?2
+        "UPDATE runner_runs SET status = 'handoff_ready', command_json = ?1, updated_at = ?2
          WHERE target_id = ?3 AND id = ?4",
         params![
             serde_json::to_string(&command)?,
@@ -1354,23 +1437,25 @@ pub fn dispatch_runner_plan(
         ],
     )?;
     conn.execute(
-        "UPDATE workorders SET status = 'runner_planned', updated_at = ?1
+        "UPDATE workorders SET status = 'handoff_ready', updated_at = ?1
          WHERE target_id = ?2 AND id = ?3",
         params![updated_at, target_id, workorder_id],
     )?;
     write_event(
         conn,
-        "runner_package_ready",
+        "runner_handoff_ready",
         Some(target_id),
         Some(workorder_id),
         &json!({
             "runner_id": runner_id,
             "prompt_path": display_path(&prompt_path),
+            "handoff_path": display_path(&handoff_path),
+            "result_path": display_path(&result_path),
             "command_path": display_path(&command_path)
         }),
     )?;
     Ok(json!({
-        "status": "package_ready",
+        "status": "handoff_ready",
         "target_id": target_id,
         "workorder_id": workorder_id,
         "runner_id": runner_id,
@@ -1414,144 +1499,6 @@ pub fn render_prompt_for_workorder(
     }))
 }
 
-pub fn start_runner_package(conn: &Connection, target_id: &str, runner_id: i64) -> Result<Value> {
-    let runner = get_runner_run(conn, target_id, runner_id)?;
-    let runner_status = runner
-        .get("runner_status")
-        .and_then(Value::as_str)
-        .context("runner_status is missing")?;
-    if runner_status != "package_ready" {
-        bail!("runner {runner_id} is not package_ready");
-    }
-    let mut command = runner
-        .get("command")
-        .cloned()
-        .context("runner command is missing")?;
-    let repo_path = value_string(&command, "/target/repo_path", "target repo path")?;
-    let workorder_id = value_string(&command, "/workorder_id", "workorder id")?;
-    let worker_id = value_string(&command, "/worker/id", "worker id")?;
-    let max_concurrency = command
-        .pointer("/worker/max_concurrency")
-        .and_then(Value::as_i64)
-        .filter(|value| *value > 0)
-        .context("worker max_concurrency is missing")?;
-    let running = running_count_for_worker(conn, target_id, &worker_id)?;
-    if running >= max_concurrency as usize {
-        bail!(
-            "worker {worker_id} has reached max_concurrency {max_concurrency} for target {target_id}"
-        );
-    }
-    let prompt_path = PathBuf::from(value_string(
-        &command,
-        "/package/prompt_path",
-        "package prompt path",
-    )?);
-    let result_schema_path = PathBuf::from(value_string(
-        &command,
-        "/package/result_schema_path",
-        "package result schema path",
-    )?);
-    let package_root = PathBuf::from(value_string(&command, "/package/root", "package root")?);
-    let prompt = fs::read_to_string(&prompt_path)
-        .with_context(|| format!("failed to read {}", display_path(&prompt_path)))?;
-    let dirs = ensure_app_dirs()?;
-    let target_segment = path_segment(target_id, "target id")?;
-    let logs_dir = dirs
-        .logs
-        .join("runners")
-        .join(target_segment)
-        .join(runner_id.to_string());
-    fs::create_dir_all(&logs_dir)
-        .with_context(|| format!("failed to create {}", display_path(&logs_dir)))?;
-    let stdout_path = logs_dir.join("stdout.jsonl");
-    let stderr_path = logs_dir.join("stderr.log");
-    let last_message_path = package_root.join("last-message.json");
-    let codex_binary =
-        env::var("CODEX_AUTOMATION_CODEX_BIN").unwrap_or_else(|_| "codex".to_owned());
-    let sandbox = command
-        .pointer("/worker/sandbox")
-        .and_then(Value::as_str)
-        .unwrap_or("read-only");
-    let approval_policy = command
-        .pointer("/worker/approval_policy")
-        .and_then(Value::as_str)
-        .unwrap_or("never");
-    let args = vec![
-        "exec".to_owned(),
-        "--json".to_owned(),
-        "-C".to_owned(),
-        repo_path.clone(),
-        "--sandbox".to_owned(),
-        sandbox.to_owned(),
-        "--ask-for-approval".to_owned(),
-        approval_policy.to_owned(),
-        "--output-schema".to_owned(),
-        display_path(&result_schema_path),
-        "--output-last-message".to_owned(),
-        display_path(&last_message_path),
-        "-".to_owned(),
-    ];
-    let stdout = fs::File::create(&stdout_path)
-        .with_context(|| format!("failed to create {}", display_path(&stdout_path)))?;
-    let stderr = fs::File::create(&stderr_path)
-        .with_context(|| format!("failed to create {}", display_path(&stderr_path)))?;
-    let mut child = Command::new(&codex_binary)
-        .args(&args)
-        .env("CODEX_AUTOMATION_TARGET_ID", target_id)
-        .env("CODEX_AUTOMATION_WORKORDER_ID", &workorder_id)
-        .env("CODEX_AUTOMATION_RUNNER_ID", runner_id.to_string())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr))
-        .spawn()
-        .with_context(|| format!("failed to start Codex runner with {codex_binary}"))?;
-    let pid = child.id();
-    let mut stdin = child
-        .stdin
-        .take()
-        .context("Codex runner stdin is missing")?;
-    stdin
-        .write_all(prompt.as_bytes())
-        .context("failed to write runner prompt to Codex stdin")?;
-    drop(stdin);
-    let started_at = now_iso();
-    command["execution"] = json!({
-        "status": "running",
-        "execute_requested": true,
-        "started_at": started_at,
-        "pid": pid,
-        "codex_binary": codex_binary,
-        "args": args,
-        "sandbox": sandbox,
-        "approval_policy": approval_policy,
-        "logs": {
-            "stdout_path": display_path(&stdout_path),
-            "stderr_path": display_path(&stderr_path),
-            "last_message_path": display_path(&last_message_path)
-        }
-    });
-    set_runner_state(conn, target_id, runner_id, "running", &command)?;
-    conn.execute(
-        "UPDATE workorders SET status = 'runner_running', updated_at = ?1
-         WHERE target_id = ?2 AND id = ?3",
-        params![started_at, target_id, workorder_id],
-    )?;
-    write_event(
-        conn,
-        "runner_started",
-        Some(target_id),
-        Some(&workorder_id),
-        &json!({"runner_id": runner_id, "pid": pid}),
-    )?;
-    Ok(json!({
-        "status": "running",
-        "target_id": target_id,
-        "workorder_id": workorder_id,
-        "runner_id": runner_id,
-        "command": command,
-    }))
-}
-
 fn refresh_one_runner(conn: &mut Connection, runner: &Value) -> Result<Value> {
     let target_id = runner
         .get("target_id")
@@ -1575,8 +1522,8 @@ fn refresh_one_runner(conn: &mut Connection, runner: &Value) -> Result<Value> {
         .context("runner command is missing")?;
     if result_count_for_workorder(conn, target_id, workorder_id)? > 0 {
         if runner_status != "completed_from_result" {
-            command["execution"]["status"] = json!("completed_from_result");
-            command["execution"]["completed_at"] = json!(now_iso());
+            command["handoff"]["status"] = json!("completed_from_result");
+            command["handoff"]["completed_at"] = json!(now_iso());
             set_runner_state(
                 conn,
                 target_id,
@@ -1587,21 +1534,21 @@ fn refresh_one_runner(conn: &mut Connection, runner: &Value) -> Result<Value> {
         }
         return Ok(json!({"runner_id": runner_id, "status": "completed_from_result"}));
     }
-    if let Some(last_message_path) = command
-        .pointer("/execution/logs/last_message_path")
+    if let Some(result_path) = command
+        .pointer("/package/result_path")
         .and_then(Value::as_str)
         .map(PathBuf::from)
     {
-        if last_message_path.is_file() {
-            let text = fs::read_to_string(&last_message_path)
-                .with_context(|| format!("failed to read {}", display_path(&last_message_path)))?;
+        if result_path.is_file() {
+            let text = fs::read_to_string(&result_path)
+                .with_context(|| format!("failed to read {}", display_path(&result_path)))?;
             if let Ok(result_payload) = serde_json::from_str::<Value>(&text) {
                 if result_payload.get("workorder_id").and_then(Value::as_str) == Some(workorder_id)
                 {
                     let recorded = submit_result(conn, target_id, result_payload)?;
-                    command["execution"]["status"] = json!("completed_from_result");
-                    command["execution"]["completed_at"] = json!(now_iso());
-                    command["execution"]["ingested_result"] = recorded;
+                    command["handoff"]["status"] = json!("completed_from_result");
+                    command["handoff"]["completed_at"] = json!(now_iso());
+                    command["handoff"]["ingested_result"] = recorded;
                     set_runner_state(
                         conn,
                         target_id,
@@ -1614,41 +1561,7 @@ fn refresh_one_runner(conn: &mut Connection, runner: &Value) -> Result<Value> {
             }
         }
     }
-    if runner_status != "running" {
-        return Ok(json!({"runner_id": runner_id, "status": runner_status}));
-    }
-    let alive = command
-        .pointer("/execution/pid")
-        .and_then(Value::as_u64)
-        .and_then(|pid| pid_alive(pid as u32));
-    match alive {
-        Some(true) => Ok(json!({"runner_id": runner_id, "status": "running"})),
-        Some(false) => {
-            command["execution"]["status"] = json!("runner_lost_before_result");
-            command["execution"]["lost_at"] = json!(now_iso());
-            set_runner_state(
-                conn,
-                target_id,
-                runner_id,
-                "runner_lost_before_result",
-                &command,
-            )?;
-            conn.execute(
-                "UPDATE workorders SET status = 'failed', updated_at = ?1
-                 WHERE target_id = ?2 AND id = ?3",
-                params![now_iso(), target_id, workorder_id],
-            )?;
-            write_event(
-                conn,
-                "runner_lost_before_result",
-                Some(target_id),
-                Some(workorder_id),
-                &json!({"runner_id": runner_id}),
-            )?;
-            Ok(json!({"runner_id": runner_id, "status": "runner_lost_before_result"}))
-        }
-        None => Ok(json!({"runner_id": runner_id, "status": "running", "pid_alive": "unknown"})),
-    }
+    Ok(json!({"runner_id": runner_id, "status": runner_status}))
 }
 
 pub fn refresh_runner_runs(conn: &mut Connection, target_id: &str) -> Result<Value> {
@@ -1681,10 +1594,20 @@ pub fn list_runner_runs(conn: &Connection, target_id: &str) -> Result<Value> {
     let rows = statement.query_map(params![target_id], |row| {
         let command_text: String = row.get(4)?;
         let command: Value = serde_json::from_str(&command_text).unwrap_or_else(|_| json!({}));
+        let worker_id = command
+            .pointer("/worker/id")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let worker_name = command
+            .pointer("/worker/name")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         Ok(json!({
             "id": row.get::<_, i64>(0)?,
             "target_id": row.get::<_, String>(1)?,
             "workorder_id": row.get::<_, String>(2)?,
+            "worker_id": worker_id,
+            "worker_name": worker_name,
             "runner_status": row.get::<_, String>(3)?,
             "command": command,
             "created_at": row.get::<_, String>(5)?,
@@ -1709,10 +1632,20 @@ pub fn get_runner_run(conn: &Connection, target_id: &str, runner_id: i64) -> Res
                 let command_text: String = row.get(4)?;
                 let command: Value =
                     serde_json::from_str(&command_text).unwrap_or_else(|_| json!({}));
+                let worker_id = command
+                    .pointer("/worker/id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                let worker_name = command
+                    .pointer("/worker/name")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
                 Ok(json!({
                     "id": row.get::<_, i64>(0)?,
                     "target_id": row.get::<_, String>(1)?,
                     "workorder_id": row.get::<_, String>(2)?,
+                    "worker_id": worker_id,
+                    "worker_name": worker_name,
                     "runner_status": row.get::<_, String>(3)?,
                     "command": command,
                     "created_at": row.get::<_, String>(5)?,

@@ -29,6 +29,20 @@ Use $codex-automation-setup to enable codex-automation for this repository.
 The setup skill installs the binary from GitHub Releases when
 `codex-automation` is not already available on `PATH`.
 
+Verify the installed binary with:
+
+```bash
+codex-automation --version
+codex-automation doctor --json
+codex-automation db doctor --json
+codex-automation paths --json
+```
+
+`paths --json` reports `control_workspace: null` until a workspace is supplied
+with `--workspace`; that is expected during first-run inspection.
+If `--version` fails on an older release binary, run `codex-automation --help`
+and `codex-automation doctor --json`, then update to a newer release.
+
 Developers can install from source:
 
 ```bash
@@ -85,10 +99,26 @@ Initialize a control workspace and register a target in one command:
 codex-automation init <target-path-or-git-url> --workspace ./codex-automation --profile balanced --json
 ```
 
+Preview the same setup without writing files or cloning Git URLs:
+
+```bash
+codex-automation init <target-path-or-git-url> --workspace ./codex-automation --profile balanced --plan --json
+```
+
+The plan reports whether the chosen control workspace already exists, whether
+it looks like a source checkout, and where app-state artifacts would be written.
+`init` refuses to initialize a non-empty directory without
+`codex-automation.toml` unless `--overwrite-workspace` is passed.
+
 The init command clones or resolves the target, runs doctor checks,
 initializes or reuses the thin control workspace, registers the target in
 SQLite, loads the default runnable workers, generates a target pack, runs the
-first heartbeat, and prints handoff information for the supervising agent.
+first heartbeat, creates a Codex App handoff package, and prints handoff
+information for the supervising agent. The heartbeat does not launch detached
+or headless Codex processes. The handoff includes the resolved binary path, so
+agents can use an absolute command when `codex-automation` is not on `PATH`.
+Setup output includes target Git state before and after setup, plus an
+`unchanged` flag.
 
 Manual bootstrap uses the same primitives:
 
@@ -121,6 +151,9 @@ The updater replaces the release binary, runs `codex-automation update --json`,
 applies database migrations, checks registered targets, regenerates the target
 pack for the selected target, and runs a heartbeat dry-run without starting
 detached workers.
+
+Use update when `codex-automation target list --json` shows the requested target
+is already registered.
 
 For state-only validation with the installed binary:
 
@@ -206,11 +239,10 @@ codex-automation target pack my-app --json
 codex-automation heartbeat run my-app --json
 ```
 
-Plan a runner handoff, optionally execute it, and record approvals:
+Plan a Codex App runner handoff and record approvals:
 
 ```bash
 codex-automation heartbeat run my-app --json
-CODEX_AUTOMATION_ENABLE_RUNNER_EXECUTION=1 codex-automation heartbeat run my-app --execute --json
 codex-automation runner refresh my-app --json
 codex-automation runner list my-app --json
 codex-automation runner status my-app <runner-id> --json
@@ -218,13 +250,19 @@ codex-automation approval request my-app --workorder-id inspect-1 --reason "Need
 codex-automation approval record my-app approval-inspect-1 --decision approved --message "Approved" --json
 ```
 
-Heartbeat creates runner packages under the OS app-state artifacts directory.
-Each package contains `prompt.md`, `result.schema.json`, and `command.json`.
-`--execute` starts `codex exec` only when
-`CODEX_AUTOMATION_ENABLE_RUNNER_EXECUTION=1` is present and the selected worker
-has available concurrency. The launcher does not pass a model override; Codex
-uses the local user configuration. `runner refresh` tracks PID state and can
-ingest a worker's final JSON result.
+Runner dispatch creates a handoff package for Codex App. `codex-automation`
+does not launch headless Codex processes. Workers can record results through
+`codex-automation result submit`, or a controller can save the worker's final
+JSON object to the package `result.json` and run
+`codex-automation runner refresh`.
+
+Heartbeat creates runner handoff packages under the OS app-state artifacts
+directory. Each package contains `prompt.md`, `handoff.md`, `result.json`, and
+`command.json`. `runner refresh` ingests submitted results or package
+`result.json` files.
+
+Target packs include Git branch, head, dirty status, staged/unstaged counts,
+and untracked counts when the target is a Git checkout.
 
 ## Current Core
 
@@ -239,8 +277,7 @@ ingest a worker's final JSON result.
 - workorder creation/list/status
 - target pack generation
 - one-step loop planning and heartbeat orchestration
-- runner package generation, worker concurrency enforcement, gated Codex exec
-  launch, refresh, list, and status
+- runner handoff package generation, refresh, list, and status
 - approval request/list/record
 - transactional result submission and listing
 - safe uninstall planning/removal for app-state, setup skill, and generated

@@ -99,7 +99,7 @@ def verify_checksum(archive: Path, archive_name: str, checksum_file: Path) -> bo
     checksums = parse_checksums(checksum_file.read_text(encoding="utf-8"))
     expected = checksums.get(archive_name)
     if not expected:
-        return False
+        raise RuntimeError(f"SHA256SUMS did not contain {archive_name}")
     actual = hashlib.sha256(archive.read_bytes()).hexdigest()
     if actual != expected:
         raise RuntimeError(f"checksum mismatch for {archive_name}")
@@ -135,6 +135,7 @@ def install_binary(
     version: str,
     install_dir: Path,
     force: bool,
+    allow_missing_checksum: bool = False,
 ) -> dict[str, Any]:
     """Install the release binary and return an operation payload."""
     target, archive_name, binary_name = platform_asset()
@@ -156,9 +157,12 @@ def install_binary(
         try:
             download(f"{base_url}/SHA256SUMS", checksum_file)
             checksum_verified = verify_checksum(archive, archive_name, checksum_file)
-        except RuntimeError:
-            raise
-        except Exception:
+        except Exception as exc:
+            if not allow_missing_checksum:
+                raise RuntimeError(
+                    "checksum verification failed; rerun with "
+                    "--allow-missing-checksum only for trusted local testing"
+                ) from exc
             checksum_verified = False
         package_dir = temp / "pkg"
         package_dir.mkdir()
@@ -206,6 +210,7 @@ def ensure_binary(
     version: str = DEFAULT_VERSION,
     install_dir: Path | None = None,
     force: bool = False,
+    allow_missing_checksum: bool = False,
 ) -> Path:
     """Return an existing binary or install one from GitHub Releases."""
     destination = install_dir or default_install_dir()
@@ -218,6 +223,7 @@ def ensure_binary(
         version=version,
         install_dir=destination,
         force=force,
+        allow_missing_checksum=allow_missing_checksum,
     )
     return Path(str(payload["binary"]))
 
@@ -235,6 +241,11 @@ def parse_args() -> argparse.Namespace:
         else default_install_dir(),
     )
     parser.add_argument("--force", action="store_true", help="Replace an existing binary")
+    parser.add_argument(
+        "--allow-missing-checksum",
+        action="store_true",
+        help="Allow install when SHA256SUMS is unavailable; use only for trusted testing.",
+    )
     parser.add_argument("--json", action="store_true")
     return parser.parse_args()
 
@@ -247,6 +258,7 @@ def main() -> int:
         version=args.version,
         install_dir=args.install_dir.expanduser(),
         force=args.force,
+        allow_missing_checksum=args.allow_missing_checksum,
     )
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))

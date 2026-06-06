@@ -20,17 +20,32 @@ fn run_json_with_env(args: &[&str], app_home: &Path, extra_env: &[(&str, &str)])
     serde_json::from_slice(&output).expect("command should print JSON")
 }
 
-fn run_failure(args: &[&str], app_home: &Path, extra_env: &[(&str, &str)]) -> String {
+fn run_failure(args: &[&str], app_home: &Path) -> String {
     let mut command = Command::cargo_bin("codex-automation").expect("binary should build");
-    command
+    let output = command
         .args(args)
         .arg("--json")
-        .env("CODEX_AUTOMATION_HOME", app_home);
-    for (key, value) in extra_env {
-        command.env(key, value);
-    }
-    let output = command.assert().failure().get_output().stderr.clone();
+        .env("CODEX_AUTOMATION_HOME", app_home)
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
     String::from_utf8(output).expect("stderr should be utf8")
+}
+
+#[test]
+fn cli_prints_version() {
+    let mut command = Command::cargo_bin("codex-automation").expect("binary should build");
+    let output = command
+        .arg("--version")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(output).expect("version output should be utf-8");
+    assert!(text.contains(env!("CARGO_PKG_VERSION")));
 }
 
 #[test]
@@ -42,6 +57,52 @@ fn cli_init_bootstraps_workspace_without_embedded_skill() {
     let target = temp.path().join("target-repo");
     std::fs::create_dir(&target).expect("target repo dir");
     std::fs::write(target.join("README.md"), "demo").expect("readme");
+
+    let plan = run_json(
+        &[
+            "init",
+            target.to_str().expect("target path"),
+            "--workspace",
+            workspace.to_str().expect("workspace path"),
+            "--target-id",
+            "demo-init",
+            "--profile",
+            "observe",
+            "--plan",
+        ],
+        &app_home,
+    );
+    assert_eq!(plan["status"], "planned");
+    assert_eq!(plan["target_id"], "demo-init");
+    assert_eq!(plan["writes"]["target_repo"]["will_write"], false);
+    assert_eq!(
+        plan["writes"]["control_workspace"]["destination_status"]["collision"],
+        false
+    );
+    assert!(!workspace.exists());
+    assert!(!app_home.exists());
+
+    let source_like_workspace = temp.path().join("codex-automation-source-like");
+    std::fs::create_dir(&source_like_workspace).expect("source-like workspace dir");
+    std::fs::write(source_like_workspace.join("Cargo.toml"), "[workspace]\n")
+        .expect("source-like marker");
+    let error = run_failure(
+        &[
+            "init",
+            target.to_str().expect("target path"),
+            "--workspace",
+            source_like_workspace
+                .to_str()
+                .expect("source-like workspace path"),
+            "--target-id",
+            "demo-init",
+            "--profile",
+            "observe",
+        ],
+        &app_home,
+    );
+    assert!(error.contains("refusing to initialize control workspace"));
+    assert!(error.contains("existing_directory_looks_like_source_repo"));
 
     let init_codex_home_text = init_codex_home.to_str().expect("init codex home");
     let setup_skill = init_codex_home
@@ -70,6 +131,8 @@ fn cli_init_bootstraps_workspace_without_embedded_skill() {
     assert_eq!(init["setup_skill"]["status"], "external");
     assert_eq!(init["workspace_action"], "initialized");
     assert_eq!(init["target_registration"]["status"], "registered");
+    assert_eq!(init["workspace_destination"]["collision"], false);
+    assert_eq!(init["target_git"]["unchanged"], true);
     assert_eq!(init["worker_registrations"].as_array().unwrap().len(), 3);
     assert!(init["worker_registrations"]
         .as_array()
@@ -78,6 +141,8 @@ fn cli_init_bootstraps_workspace_without_embedded_skill() {
         .all(|worker| worker["status"] == "registered"));
     assert_eq!(init["target_pack"]["status"], "generated");
     assert_eq!(init["heartbeat"]["status"], "ok");
+    assert_eq!(init["heartbeat"]["runner_execution"], "package_only");
+    assert!(init["handoff"]["binary_path"].as_str().is_some());
     assert!(workspace.join("codex-automation.toml").is_file());
     assert!(workspace.join("targets").join("demo-init.toml").is_file());
     assert!(app_home.join("codex-automation.sqlite").is_file());
@@ -263,6 +328,7 @@ fn cli_registers_target_and_records_result() {
 
     let pack = run_json(&["target", "pack", "demo"], &app_home);
     assert_eq!(pack["status"], "generated");
+    assert!(pack["pack"]["git"]["status"].as_str().is_some());
     let pack_text = std::fs::read_to_string(
         pack["pack_path"]
             .as_str()
@@ -325,7 +391,8 @@ fn cli_registers_target_and_records_result() {
     assert_eq!(updated["target_pack"]["status"], "generated");
     assert_eq!(updated["heartbeat"]["status"], "ok");
     assert_eq!(updated["heartbeat"]["dry_run"], true);
-    assert_eq!(updated["runner_execution"], "not_started");
+    assert_eq!(updated["runner_execution"], "not_supported");
+    assert_eq!(updated["runner_handoff"], "codex_app");
 
     let checked = run_json(
         &[
@@ -379,8 +446,9 @@ fn cli_registers_target_and_records_result() {
         ],
         &app_home,
     );
-    assert_eq!(runner["status"], "package_ready");
-    assert_eq!(runner["command"]["mode"], "package");
+    assert_eq!(runner["status"], "handoff_ready");
+    assert_eq!(runner["command"]["mode"], "handoff");
+    assert_eq!(runner["command"]["runner"], "codex-app");
     assert_eq!(runner["command"]["worker"]["id"], "repo-maintainer");
     let prompt_path = runner["command"]["package"]["prompt_path"]
         .as_str()
@@ -414,18 +482,36 @@ fn cli_registers_target_and_records_result() {
         .expect("command path");
     let command_text = std::fs::read_to_string(command_path).expect("command should exist");
     let command_json: Value = serde_json::from_str(&command_text).expect("command json");
-    assert_eq!(command_json["mode"], "package");
-    let result_schema_path = runner["command"]["package"]["result_schema_path"]
+    assert_eq!(command_json["mode"], "handoff");
+    assert_eq!(command_json["execution"], "package_only");
+    assert!(command_json["binary_path"].as_str().is_some());
+    assert!(command_json["result_contract"]["command"]
         .as_str()
-        .expect("result schema path");
-    assert!(std::fs::read_to_string(result_schema_path)
-        .expect("result schema should exist")
-        .contains("codex-automation worker result"));
+        .expect("result command")
+        .contains("result submit demo --workorder-id wo-2"));
+    let handoff_path = runner["command"]["package"]["handoff_path"]
+        .as_str()
+        .expect("handoff path");
+    assert!(std::fs::read_to_string(handoff_path)
+        .expect("handoff should exist")
+        .contains("Codex Automation Handoff"));
+    let result_path = runner["command"]["package"]["result_path"]
+        .as_str()
+        .expect("result path");
+    assert!(result_path.ends_with("result.json"));
 
     let runner_list = run_json(&["runner", "list", "demo"], &app_home);
     assert_eq!(
         runner_list["runner_runs"][0]["runner_status"],
-        "package_ready"
+        "handoff_ready"
+    );
+    assert_eq!(
+        runner_list["runner_runs"][0]["worker_id"],
+        "repo-maintainer"
+    );
+    assert_eq!(
+        runner_list["runner_runs"][0]["worker_name"],
+        "Repo Maintainer"
     );
     let runner_id = runner["runner_id"].as_i64().expect("runner id").to_string();
     let runner_status = run_json(&["runner", "status", "demo", &runner_id], &app_home);
@@ -433,6 +519,7 @@ fn cli_registers_target_and_records_result() {
         runner_status["command"]["package"]["prompt_path"],
         prompt_path
     );
+    assert_eq!(runner_status["worker_id"], "repo-maintainer");
 
     let approval = run_json(
         &[
@@ -520,7 +607,9 @@ fn cli_heartbeat_generates_pack_and_dispatches_ready_work() {
 
     let heartbeat = run_json(&["heartbeat", "run", "demo"], &app_home);
     assert_eq!(heartbeat["status"], "ok");
-    assert_eq!(heartbeat["dispatched"][0]["status"], "package_ready");
+    assert_eq!(heartbeat["dispatch_summary"]["status"], "dispatched");
+    assert_eq!(heartbeat["dispatch_summary"]["dispatched_count"], 1);
+    assert_eq!(heartbeat["dispatched"][0]["status"], "handoff_ready");
     assert_eq!(
         heartbeat["dispatched"][0]["command"]["worker"]["id"],
         "repo-maintainer"
@@ -532,42 +621,24 @@ fn cli_heartbeat_generates_pack_and_dispatches_ready_work() {
     )
     .expect("target pack")
     .contains("Cargo.toml"));
+
+    let idle_heartbeat = run_json(&["heartbeat", "run", "demo"], &app_home);
+    assert_eq!(idle_heartbeat["status"], "ok");
+    assert_eq!(idle_heartbeat["dispatch_summary"]["status"], "idle");
+    assert_eq!(
+        idle_heartbeat["dispatch_summary"]["reason"],
+        "active_workorder_exists"
+    );
+    assert_eq!(idle_heartbeat["dispatch_summary"]["dispatched_count"], 0);
 }
 
-#[cfg(unix)]
 #[test]
-fn cli_can_start_mock_runner_and_ingest_final_result() {
-    use std::os::unix::fs::PermissionsExt;
-    use std::time::Duration;
-
+fn cli_can_ingest_handoff_result_file() {
     let temp = TempDir::new().expect("tempdir");
     let app_home = temp.path().join("app-state");
     let workspace = temp.path().join("codex-automation");
     let target = temp.path().join("target-repo");
     std::fs::create_dir(&target).expect("target repo dir");
-    let mock_codex = temp.path().join("mock-codex");
-    std::fs::write(
-        &mock_codex,
-        r#"#!/bin/sh
-out=""
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = "--output-last-message" ]; then
-    shift
-    out="$1"
-  fi
-  shift
-done
-cat >/dev/null
-mkdir -p "$(dirname "$out")"
-printf '%s' '{"workorder_id":"wo-exec","status":"discovery_no_findings","summary":"mock runner completed","next_action":"no_action"}' > "$out"
-"#,
-    )
-    .expect("mock codex script");
-    let mut permissions = std::fs::metadata(&mock_codex)
-        .expect("mock metadata")
-        .permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&mock_codex, permissions).expect("chmod mock");
 
     run_json(
         &[
@@ -615,7 +686,7 @@ printf '%s' '{"workorder_id":"wo-exec","status":"discovery_no_findings","summary
             "--kind",
             "repo_discovery",
             "--title",
-            "Execute mock runner",
+            "Handoff worker",
             "--payload-json",
             r#"{"scope":"read_only"}"#,
         ],
@@ -630,28 +701,22 @@ printf '%s' '{"workorder_id":"wo-exec","status":"discovery_no_findings","summary
             "wo-exec",
             "--worker",
             "repo-maintainer",
-            "--execute",
         ],
         &app_home,
-        &[
-            ("CODEX_AUTOMATION_ENABLE_RUNNER_EXECUTION", "1"),
-            (
-                "CODEX_AUTOMATION_CODEX_BIN",
-                mock_codex.to_str().expect("mock path"),
-            ),
-        ],
+        &[],
     );
-    assert_eq!(started["status"], "running");
-    assert_eq!(started["command"]["execution"]["status"], "running");
+    assert_eq!(started["status"], "handoff_ready");
+    assert_eq!(started["command"]["handoff"]["status"], "ready");
+    let result_path = started["command"]["package"]["result_path"]
+        .as_str()
+        .expect("result path");
+    std::fs::write(
+        result_path,
+        r#"{"workorder_id":"wo-exec","status":"discovery_no_findings","summary":"handoff completed","next_action":"no_action"}"#,
+    )
+    .expect("result file");
 
-    let mut refreshed = run_json(&["runner", "refresh", "demo"], &app_home);
-    for _ in 0..20 {
-        if refreshed["runner_refresh"]["runners"][0]["status"] == "completed_from_result" {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-        refreshed = run_json(&["runner", "refresh", "demo"], &app_home);
-    }
+    let refreshed = run_json(&["runner", "refresh", "demo"], &app_home);
     assert_eq!(refreshed["runner_refresh"]["checked"], 1);
     assert_eq!(
         refreshed["runner_refresh"]["runners"][0]["status"],
@@ -660,138 +725,4 @@ printf '%s' '{"workorder_id":"wo-exec","status":"discovery_no_findings","summary
     let results = run_json(&["result", "list", "demo"], &app_home);
     assert_eq!(results["results"][0]["workorder_id"], "wo-exec");
     assert_eq!(results["results"][0]["status"], "discovery_no_findings");
-}
-
-#[cfg(unix)]
-#[test]
-fn cli_blocks_execute_when_worker_concurrency_is_full() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let temp = TempDir::new().expect("tempdir");
-    let app_home = temp.path().join("app-state");
-    let workspace = temp.path().join("codex-automation");
-    let target = temp.path().join("target-repo");
-    std::fs::create_dir(&target).expect("target repo dir");
-    let worker_file = temp.path().join("serial-worker.toml");
-    std::fs::write(
-        &worker_file,
-        r#"version = 1
-
-[worker]
-id = "serial-discovery"
-name = "Serial Discovery"
-description = "Read-only serial worker."
-skills = ["repo-discovery"]
-allowed_workorder_kinds = ["repo_discovery"]
-sandbox = "read-only"
-approval_policy = "never"
-autonomy_profile = "observe"
-max_concurrency = 1
-custom_instructions = "Inspect only."
-"#,
-    )
-    .expect("worker file");
-    let mock_codex = temp.path().join("mock-codex-sleep");
-    std::fs::write(
-        &mock_codex,
-        r#"#!/bin/sh
-cat >/dev/null
-sleep 2
-"#,
-    )
-    .expect("mock codex script");
-    let mut permissions = std::fs::metadata(&mock_codex)
-        .expect("mock metadata")
-        .permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&mock_codex, permissions).expect("chmod mock");
-
-    run_json(
-        &[
-            "workspace",
-            "init",
-            workspace.to_str().expect("workspace path"),
-        ],
-        &app_home,
-    );
-    run_json(
-        &[
-            "target",
-            "add",
-            "demo",
-            "--repo",
-            target.to_str().expect("target path"),
-            "--workspace",
-            workspace.to_str().expect("workspace path"),
-            "--profile",
-            "observe",
-        ],
-        &app_home,
-    );
-    run_json(
-        &[
-            "worker",
-            "add",
-            "demo",
-            "--from-file",
-            worker_file.to_str().expect("worker path"),
-        ],
-        &app_home,
-    );
-    for id in ["wo-a", "wo-b"] {
-        run_json(
-            &[
-                "workorder",
-                "create",
-                "demo",
-                "--id",
-                id,
-                "--kind",
-                "repo_discovery",
-                "--title",
-                "Serial work",
-                "--payload-json",
-                "{}",
-            ],
-            &app_home,
-        );
-        run_json(&["loop", "run", "demo"], &app_home);
-    }
-    let env = [
-        ("CODEX_AUTOMATION_ENABLE_RUNNER_EXECUTION", "1"),
-        (
-            "CODEX_AUTOMATION_CODEX_BIN",
-            mock_codex.to_str().expect("mock path"),
-        ),
-    ];
-    let started = run_json_with_env(
-        &[
-            "runner",
-            "dispatch",
-            "demo",
-            "--workorder-id",
-            "wo-a",
-            "--worker",
-            "serial-discovery",
-            "--execute",
-        ],
-        &app_home,
-        &env,
-    );
-    assert_eq!(started["status"], "running");
-    let error = run_failure(
-        &[
-            "runner",
-            "dispatch",
-            "demo",
-            "--workorder-id",
-            "wo-b",
-            "--worker",
-            "serial-discovery",
-            "--execute",
-        ],
-        &app_home,
-        &env,
-    );
-    assert!(error.contains("max_concurrency"));
 }

@@ -14,7 +14,6 @@ const RESULT_STATUSES: &[&str] = &[
     "failed",
     "fixed",
     "needs_more_investigation",
-    "runner_lost_before_result",
     "safe_fix_candidate",
     "staging_deploy_blocked",
     "staging_deployed",

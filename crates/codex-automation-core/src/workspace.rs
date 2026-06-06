@@ -138,6 +138,89 @@ fn write_text_if_missing(path: &Path, text: &str) -> Result<()> {
     Ok(())
 }
 
+fn existing_entries(path: &Path) -> Result<Vec<String>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(path)
+        .with_context(|| format!("failed to read directory {}", display_path(path)))?
+    {
+        let entry = entry?;
+        entries.push(entry.file_name().to_string_lossy().into_owned());
+    }
+    entries.sort();
+    Ok(entries)
+}
+
+pub fn workspace_destination_status(path: &Path) -> Result<Value> {
+    let workspace = path
+        .expand_home()
+        .with_context(|| format!("failed to resolve workspace path {}", display_path(path)))?;
+    let config_path = workspace_config_path(&workspace);
+    let entries = existing_entries(&workspace)?;
+    let exists = workspace.exists();
+    let config_exists = config_path.exists();
+    let has_entries = !entries.is_empty();
+    let repo_like = entries.iter().any(|entry| {
+        matches!(
+            entry.as_str(),
+            ".git" | "Cargo.toml" | "package.json" | "pyproject.toml" | "src" | "crates" | "apps"
+        )
+    });
+    let collision = exists && !config_exists && has_entries;
+    let reason = if collision && repo_like {
+        Some("existing_directory_looks_like_source_repo")
+    } else if collision {
+        Some("existing_non_empty_directory_without_codex_automation_config")
+    } else {
+        None
+    };
+    Ok(json!({
+        "path": display_path(&workspace),
+        "exists": exists,
+        "config_path": display_path(&config_path),
+        "config_exists": config_exists,
+        "entry_count": entries.len(),
+        "sample_entries": entries.into_iter().take(12).collect::<Vec<_>>(),
+        "repo_like": repo_like,
+        "collision": collision,
+        "reason": reason,
+        "suggestion": if collision {
+            Some("Choose an empty/generated control workspace directory, or pass --overwrite-workspace only after confirming this directory is not a source repository.")
+        } else {
+            None
+        },
+    }))
+}
+
+fn ensure_workspace_destination_safe(workspace: &Path, overwrite: bool) -> Result<()> {
+    let status = workspace_destination_status(workspace)?;
+    if status
+        .get("collision")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+        && !overwrite
+    {
+        bail!(
+            "refusing to initialize control workspace in a non-empty directory without codex-automation.toml: {}\nreason: {}\nsuggestion: {}",
+            status
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("<unknown>"),
+            status
+                .get("reason")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("workspace_collision"),
+            status
+                .get("suggestion")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("choose another workspace path"),
+        );
+    }
+    Ok(())
+}
+
 pub fn initialize_workspace(path: &Path, name: Option<&str>, overwrite: bool) -> Result<Value> {
     let workspace = path
         .expand_home()
@@ -149,10 +232,11 @@ pub fn initialize_workspace(path: &Path, name: Option<&str>, overwrite: bool) ->
             .unwrap_or("codex-automation")
     });
     let workspace_id = slugify_id(workspace_name);
+    let config_path = workspace_config_path(&workspace);
+    ensure_workspace_destination_safe(&workspace, overwrite)?;
     fs::create_dir_all(workspace.join("targets"))?;
     fs::create_dir_all(workspace.join("workers"))?;
     fs::create_dir_all(workspace.join("reports"))?;
-    let config_path = workspace_config_path(&workspace);
     if config_path.exists() && !overwrite {
         bail!(
             "workspace config already exists: {}",

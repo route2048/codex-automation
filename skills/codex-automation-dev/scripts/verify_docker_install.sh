@@ -88,7 +88,7 @@ from pathlib import Path
 
 payload = json.loads(Path("/work/setup.json").read_text())
 assert payload["status"] == "ready_for_handoff", payload["status"]
-assert any(item.get("status") == "package_ready" for item in payload["heartbeat"]["dispatched"])
+assert any(item.get("status") == "handoff_ready" for item in payload["heartbeat"]["dispatched"])
 print(json.dumps({
     "status": "ok",
     "image": "'"$IMAGE"'",
