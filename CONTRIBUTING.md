@@ -29,6 +29,9 @@ python3 skills/codex-automation-dev/scripts/verify_clean_install.py --repo . --j
 python3 skills/codex-automation-dev/scripts/verify_skill_install.py --repo . --install-setup-skill --install-dev-skill --overwrite --json
 ```
 
+`codex-automation-dev` is for maintainers and contributors. End users should
+install only `codex-automation-setup` from GitHub Releases.
+
 When Docker verification is explicitly wanted:
 
 ```bash

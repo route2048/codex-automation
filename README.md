@@ -256,7 +256,7 @@ target-local files.
 
 ## Setup Skill
 
-The setup skill lives at:
+End users only install the setup skill:
 
 ```text
 skills/codex-automation-setup/
@@ -281,6 +281,10 @@ To inspect where a setup wrote control and app-state files:
 codex-automation paths --workspace ./codex-automation --json
 ```
 
+Do not install `codex-automation-dev` or any maintainer release skill in normal
+user environments. They are for project verification and publication work, not
+for bootstrapping target repositories.
+
 ## Test
 
 ```bash
@@ -290,7 +294,8 @@ cargo test --workspace
 
 ## Maintainer Verification
 
-The developer verification skill lives at:
+The developer verification skill is public for maintainers and contributors,
+but it is not part of the end-user setup path:
 
 ```text
 skills/codex-automation-dev/
@@ -311,3 +316,7 @@ bash skills/codex-automation-dev/scripts/verify_docker_install.sh .
 
 The Docker verifier uses a temporary container and must not be confused with
 target app service startup. It does not push, deploy, or run real workers.
+
+The release operator skill is intentionally private and is not shipped in this
+repository. It owns public export, push, tag, GitHub Actions monitoring, and
+release-asset smoke checks for maintainers.

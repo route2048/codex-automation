@@ -1,6 +1,6 @@
 ---
 name: codex-automation-dev
-description: Run maintainer verification for codex-automation before publication or release, including Rust tests, clean local install, optional Docker clean install, release-packaged setup skill installation checks, and fixture dry-run smoke without pushing, deploying, or starting real runners.
+description: Maintainer-only verification for codex-automation before publication or release, including Rust tests, clean local install, optional Docker clean install, release-packaged setup skill installation checks, and fixture dry-run smoke without pushing, deploying, or starting real runners. Do not install this skill in normal end-user environments.
 metadata:
   short-description: Verify codex-automation for release
 ---
@@ -10,6 +10,10 @@ metadata:
 Use this skill when developing, publishing, or validating `codex-automation`
 itself. This is the maintainer/developer companion to
 `codex-automation-setup`, not the user bootstrap path.
+
+Normal users should only install `codex-automation-setup`. This dev skill may
+live in the public source tree so contributors can reproduce release-readiness
+checks, but it should not be installed as part of target-repository setup.
 
 ## Workflow
 
@@ -30,6 +34,7 @@ itself. This is the maintainer/developer companion to
 ## Boundaries
 
 - Do not push to GitHub.
+- Do not install this skill in normal user environments.
 - Do not run `--execute` unless the user explicitly asks for a real runner.
 - Do not deploy or run Docker Compose.
 - Keep all install smoke state under temporary directories by setting

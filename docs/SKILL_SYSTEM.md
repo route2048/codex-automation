@@ -2,11 +2,17 @@
 
 `codex-automation` treats skills as reusable worker operating manuals.
 
-The setup entrypoint is `skills/codex-automation-setup/`. It bootstraps this
-tool and hands ongoing work to the CLI control surface.
+The setup entrypoint is `skills/codex-automation-setup/`. It is the only skill
+normal users install. It bootstraps this tool and hands ongoing work to the CLI
+control surface.
 
 The maintainer verification entrypoint is `skills/codex-automation-dev/`. It
-runs release-readiness checks for this project itself.
+runs release-readiness checks for this project itself. It is public so
+contributors can reproduce verification, but it is not part of end-user setup.
+
+The release operator skill is private maintainer infrastructure. It is not
+included in this repository or installed by users because it can push public
+branches, create tags, and verify GitHub Releases.
 
 ## Implemented
 
